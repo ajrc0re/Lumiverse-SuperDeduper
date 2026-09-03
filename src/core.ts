@@ -59,57 +59,82 @@ function trigrams(value: string): Set<string> {
   return grams
 }
 
-export function sorensenDice(left: string, right: string): number {
-  if (!left && !right) return 0
-  if (left === right) return 1
+interface PreparedField {
+  value: string
+  grams: Set<string>
+}
 
-  const leftGrams = trigrams(left)
-  const rightGrams = trigrams(right)
-  if (leftGrams.size === 0 || rightGrams.size === 0) return 0
+type CanonicalFields = ReturnType<typeof canonicalCoreFields>
+type PreparedCanonicalFields = Record<CoreFieldKey, PreparedField>
 
+function prepareCanonicalFields(fields: CanonicalFields): PreparedCanonicalFields {
+  return Object.fromEntries(CORE_FIELD_KEYS.map((key) => [
+    key,
+    { value: fields[key], grams: trigrams(fields[key]) },
+  ])) as PreparedCanonicalFields
+}
+
+function preparedDice(left: PreparedField, right: PreparedField): number {
+  if (!left.value && !right.value) return 0
+  if (left.value === right.value) return 1
+  if (left.grams.size === 0 || right.grams.size === 0) return 0
   let intersection = 0
-  for (const gram of leftGrams) {
-    if (rightGrams.has(gram)) intersection += 1
+  const smaller = left.grams.size <= right.grams.size ? left.grams : right.grams
+  const larger = smaller === left.grams ? right.grams : left.grams
+  for (const gram of smaller) {
+    if (larger.has(gram)) intersection += 1
   }
-  return (2 * intersection) / (leftGrams.size + rightGrams.size)
+  return (2 * intersection) / (left.grams.size + right.grams.size)
+}
+
+export function sorensenDice(left: string, right: string): number {
+  return preparedDice({ value: left, grams: trigrams(left) }, { value: right, grams: trigrams(right) })
 }
 
 export function characterSimilarity(
   left: CharacterRecord,
   right: CharacterRecord,
 ): number {
-  const leftFields = canonicalCoreFields(left)
-  const rightFields = canonicalCoreFields(right)
-  let weightedScore = 0
-  let totalWeight = 0
-
-  for (const key of CORE_FIELD_KEYS) {
-    const leftValue = leftFields[key]
-    const rightValue = rightFields[key]
-    if (!leftValue && !rightValue) continue
-
-    const weight = Math.max(leftValue.length, rightValue.length, 1)
-    weightedScore += sorensenDice(leftValue, rightValue) * weight
-    totalWeight += weight
-  }
-
-  return totalWeight === 0 ? 0 : weightedScore / totalWeight
+  return canonicalSimilarity(
+    prepareCanonicalFields(canonicalCoreFields(left)),
+    prepareCanonicalFields(canonicalCoreFields(right)),
+  )
 }
 
-type CanonicalFields = ReturnType<typeof canonicalCoreFields>
-
-function canonicalSimilarity(leftFields: CanonicalFields, rightFields: CanonicalFields): number {
+function canonicalSimilarity(
+  leftFields: PreparedCanonicalFields,
+  rightFields: PreparedCanonicalFields,
+  threshold?: number,
+): number {
   let weightedScore = 0
   let totalWeight = 0
+  let maximumWeightedScore = 0
   for (const key of CORE_FIELD_KEYS) {
-    const leftValue = leftFields[key]
-    const rightValue = rightFields[key]
+    const left = leftFields[key]
+    const right = rightFields[key]
+    const leftValue = left.value
+    const rightValue = right.value
     if (!leftValue && !rightValue) continue
     const weight = Math.max(leftValue.length, rightValue.length, 1)
-    weightedScore += sorensenDice(leftValue, rightValue) * weight
     totalWeight += weight
+    const maximumDice = leftValue === rightValue
+      ? 1
+      : left.grams.size === 0 || right.grams.size === 0
+        ? 0
+        : (2 * Math.min(left.grams.size, right.grams.size)) /
+          (left.grams.size + right.grams.size)
+    maximumWeightedScore += maximumDice * weight
   }
-  return totalWeight === 0 ? 0 : weightedScore / totalWeight
+  if (totalWeight === 0) return 0
+  if (threshold !== undefined && maximumWeightedScore / totalWeight < threshold) return 0
+  for (const key of CORE_FIELD_KEYS) {
+    const left = leftFields[key]
+    const right = rightFields[key]
+    if (!left.value && !right.value) continue
+    const weight = Math.max(left.value.length, right.value.length, 1)
+    weightedScore += preparedDice(left, right) * weight
+  }
+  return weightedScore / totalWeight
 }
 
 function pairAll(ids: string[]): MatchPair[] {
@@ -230,7 +255,7 @@ export async function findDuplicateGroupsAsync(
 
   const threshold = Math.min(1, Math.max(0, similarityThreshold))
   const parent = new Map(characters.map((character) => [character.id, character.id]))
-  const fields = characters.map(canonicalCoreFields)
+  const fields = characters.map((character) => prepareCanonicalFields(canonicalCoreFields(character)))
   const matches: MatchPair[] = []
   const operatedIndexes = operatedCharacterIds
     ? characters.flatMap((character, index) => operatedCharacterIds.has(character.id) ? [index] : [])
@@ -256,7 +281,7 @@ export async function findDuplicateGroupsAsync(
 
   const comparePair = (left: number, right: number): boolean => {
     if (signal?.aborted) throw new Error('SCAN_CANCELLED')
-    const similarity = canonicalSimilarity(fields[left]!, fields[right]!)
+    const similarity = canonicalSimilarity(fields[left]!, fields[right]!, threshold)
     if (similarity >= threshold) {
       const leftId = characters[left]!.id
       const rightId = characters[right]!.id

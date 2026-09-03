@@ -142,6 +142,9 @@ export interface DuplicateGroup {
 export interface ScanResult {
   groups: DuplicateGroup[]
   totalCharacters: number
+  scopeTotalCharacters: number
+  scopeOffset: number
+  scopeLimit: number | null
   duplicateCharacters: number
   availability: PermissionAvailability
   scannedAt: number
@@ -156,6 +159,8 @@ export type FrontendRequest =
       similarityThreshold: number
       filterQuery?: string
       searchField?: SearchField
+      batchSize?: number
+      batchOffset?: number
     }
   | { type: 'cancel_scan'; requestId: string }
   | {
@@ -179,6 +184,8 @@ export type BackendResponse =
       backendVersion?: string
       filterQuery?: string
       searchField?: SearchField
+      batchSize?: number
+      batchOffset?: number
     }
   | {
       type: 'scan_progress'

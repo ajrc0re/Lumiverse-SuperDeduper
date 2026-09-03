@@ -213,12 +213,46 @@ export function setup(ctx: SpindleFrontendContext) {
   const searchSlot = element('div', 'sd-component-slot')
   searchField.append(searchLabel, searchSlot)
 
+  const batchModeField = element('div', 'sd-field')
+  const batchModeLabel = element('label', '', 'Scan scope')
+  const batchModeSelect = element('select', 'sd-native-control')
+  batchModeSelect.setAttribute('aria-label', 'Scan scope')
+  for (const [value, label] of [['all', 'All matching cards'], ['batch', 'Batch']] as const) {
+    const option = element('option', '', label)
+    option.value = value
+    batchModeSelect.append(option)
+  }
+  batchModeField.append(batchModeLabel, batchModeSelect)
+
+  const batchSettingsField = element('div', 'sd-field sd-hidden')
+  const batchSettingsLabel = element('label', '', 'Batch size and starting position')
+  const batchSettings = element('div', 'sd-threshold-line')
+  const batchSizeInput = element('input', 'sd-native-control')
+  batchSizeInput.type = 'number'
+  batchSizeInput.min = '1'
+  batchSizeInput.max = '1000'
+  batchSizeInput.step = '1'
+  batchSizeInput.value = '100'
+  batchSizeInput.setAttribute('aria-label', 'Batch size')
+  const batchStartInput = element('input', 'sd-native-control')
+  batchStartInput.type = 'number'
+  batchStartInput.min = '1'
+  batchStartInput.step = '1'
+  batchStartInput.value = '1'
+  batchStartInput.setAttribute('aria-label', 'Batch starting position')
+  batchSettings.append(batchSizeInput, batchStartInput)
+  batchSettingsField.append(batchSettingsLabel, batchSettings)
+
   const actions = element('div', 'sd-actions')
   const scanButton = element('button', 'sd-button', 'Scan characters')
   scanButton.type = 'button'
+  const previousBatchButton = element('button', 'sd-button sd-button--secondary', 'Previous batch')
+  previousBatchButton.type = 'button'
+  const nextBatchButton = element('button', 'sd-button sd-button--secondary', 'Next batch')
+  nextBatchButton.type = 'button'
   const status = element('span', 'sd-muted', 'Scans your entire character library. Connecting to extension backend…')
-  actions.append(scanButton, status)
-  controls.append(modeField, thresholdField, searchScopeField, searchField, actions)
+  actions.append(scanButton, previousBatchButton, nextBatchButton, status)
+  controls.append(modeField, thresholdField, searchScopeField, searchField, batchModeField, batchSettingsField, actions)
   root.append(controls)
   const progressPanel = element('div', 'sd-progress')
   progressPanel.hidden = true
@@ -241,6 +275,9 @@ export function setup(ctx: SpindleFrontendContext) {
   let similarityThreshold = 90
   let searchQuery = ''
   let selectedSearchField: SearchField = 'name'
+  let batchEnabled = false
+  let batchSize = 100
+  let batchOffset = 0
   let scanTimeoutId: number | null = null
   let cancelRequestPending = false
   let backendStatusTimeoutId: number | null = null
@@ -252,6 +289,11 @@ export function setup(ctx: SpindleFrontendContext) {
     scanButton.textContent = scanning ? 'Stop search' : 'Scan characters'
     scanButton.classList.toggle('sd-button--danger', scanning)
     scanButton.disabled = !charactersAvailable || cancelRequestPending
+    previousBatchButton.hidden = !batchEnabled
+    nextBatchButton.hidden = !batchEnabled
+    previousBatchButton.disabled = scanning || cancelRequestPending || batchOffset === 0
+    nextBatchButton.disabled = scanning || cancelRequestPending ||
+      (currentResult !== null && currentResult.scopeOffset + currentResult.totalCharacters >= currentResult.scopeTotalCharacters)
   }
 
   type Control<T> = { getValue: () => T; setValue?: (value: T) => void; destroy: () => void }
@@ -308,6 +350,9 @@ export function setup(ctx: SpindleFrontendContext) {
     input.setAttribute('aria-label', 'Filter duplicate results')
     const onInput = () => {
       searchQuery = input.value
+      batchOffset = 0
+      batchStartInput.value = '1'
+      updateScanButton()
       renderResults()
     }
     input.addEventListener('input', onInput)
@@ -333,6 +378,9 @@ export function setup(ctx: SpindleFrontendContext) {
       const value = select.value
       if (value !== 'name' && value !== 'creator' && value !== 'tag' && value !== 'id') return
       selectedSearchField = value
+      batchOffset = 0
+      batchStartInput.value = '1'
+      updateScanButton()
       renderResults()
     }
     select.addEventListener('change', onChange)
@@ -397,6 +445,9 @@ export function setup(ctx: SpindleFrontendContext) {
       onChange: (value) => {
         if (value !== 'name' && value !== 'creator' && value !== 'tag' && value !== 'id') return
         selectedSearchField = value
+        batchOffset = 0
+        batchStartInput.value = '1'
+        updateScanButton()
         renderResults()
       },
     })
@@ -404,6 +455,25 @@ export function setup(ctx: SpindleFrontendContext) {
   } catch {
     searchScopeControl = nativeSearchScopeControl()
   }
+
+  const onBatchModeChange = () => {
+    batchEnabled = batchModeSelect.value === 'batch'
+    batchSettingsField.classList.toggle('sd-hidden', !batchEnabled)
+    batchOffset = 0
+    batchStartInput.value = '1'
+    updateScanButton()
+  }
+  const onBatchSettingsChange = () => {
+    batchSize = Math.min(1_000, Math.max(1, Math.floor(Number(batchSizeInput.value) || 100)))
+    batchOffset = Math.max(0, Math.floor(Number(batchStartInput.value) || 1) - 1)
+    batchSizeInput.value = String(batchSize)
+    batchStartInput.value = String(batchOffset + 1)
+    updateScanButton()
+  }
+  batchModeSelect.addEventListener('change', onBatchModeChange)
+  batchSizeInput.addEventListener('change', onBatchSettingsChange)
+  batchStartInput.addEventListener('change', onBatchSettingsChange)
+  updateScanButton()
 
   function setPermissionState(availability: PermissionAvailability): void {
     charactersAvailable = availability.characters !== 'unavailable'
@@ -453,6 +523,7 @@ export function setup(ctx: SpindleFrontendContext) {
       return
     }
     searchQuery = searchControl.getValue()
+    onBatchSettingsChange()
     const requestId = createRequestId()
     currentScanRequestId = requestId
     cancelRequestPending = false
@@ -460,7 +531,10 @@ export function setup(ctx: SpindleFrontendContext) {
     const scopeDescription = searchQuery.trim()
       ? `${searchScopeOptions.find((option) => option.value === selectedSearchField)?.label ?? selectedSearchField}: ${searchQuery}`
       : 'the full library'
-    status.textContent = `Scan request sent for ${scopeDescription}…`
+    const batchDescription = batchEnabled
+      ? `, batch ${batchOffset + 1}–${batchOffset + batchSize}`
+      : ''
+    status.textContent = `Scan request sent for ${scopeDescription}${batchDescription}…`
     progressPanel.hidden = false
     progressBar.removeAttribute('value')
     progressLabel.textContent = 'Waiting for the backend to start…'
@@ -473,6 +547,7 @@ export function setup(ctx: SpindleFrontendContext) {
         similarityThreshold: similarityThreshold / 100,
         filterQuery: searchQuery,
         searchField: selectedSearchField,
+        ...(batchEnabled ? { batchSize, batchOffset } : {}),
       })
     } catch (error) {
       currentScanRequestId = null
@@ -506,6 +581,11 @@ export function setup(ctx: SpindleFrontendContext) {
     addBadge(summary, `${result.groups.length} duplicate groups`)
     addBadge(summary, `${result.duplicateCharacters} duplicate cards`)
     addBadge(summary, `${result.totalCharacters} cards scanned`)
+    if (result.scopeLimit !== null) {
+      const first = result.totalCharacters > 0 ? result.scopeOffset + 1 : 0
+      const last = result.scopeOffset + result.totalCharacters
+      addBadge(summary, `Batch ${first}–${last} of ${result.scopeTotalCharacters} matching cards`)
+    }
     if (visibleGroups !== result.groups.length) addBadge(summary, `${visibleGroups} groups shown`)
     const approximate = result.groups.some((group) =>
       group.cards.some((card) => card.tokens.card.approximate || card.tokens.payload.approximate),
@@ -887,7 +967,23 @@ export function setup(ctx: SpindleFrontendContext) {
     event.preventDefault()
     startScan()
   }
+  const onPreviousBatch = () => {
+    if (!batchEnabled || currentScanRequestId) return
+    onBatchSettingsChange()
+    batchOffset = Math.max(0, batchOffset - batchSize)
+    batchStartInput.value = String(batchOffset + 1)
+    startScan()
+  }
+  const onNextBatch = () => {
+    if (!batchEnabled || currentScanRequestId) return
+    onBatchSettingsChange()
+    batchOffset += batchSize
+    batchStartInput.value = String(batchOffset + 1)
+    startScan()
+  }
   scanButton.addEventListener('click', onScanClick)
+  previousBatchButton.addEventListener('click', onPreviousBatch)
+  nextBatchButton.addEventListener('click', onNextBatch)
   controls.addEventListener('keydown', onScanKeyDown)
 
   const onActionClick = (event: Event) => {
@@ -933,8 +1029,11 @@ export function setup(ctx: SpindleFrontendContext) {
         const acceptedScope = acceptedQuery
           ? `${message.searchField ?? 'name'}=${JSON.stringify(message.filterQuery)}`
           : 'the full library'
+        const acceptedBatch = message.batchSize === undefined
+          ? ''
+          : `, batch ${message.batchOffset ?? 0}–${(message.batchOffset ?? 0) + message.batchSize - 1}`
         const backendVersion = message.backendVersion ?? 'unknown'
-        status.textContent = `Backend v${backendVersion} accepted ${acceptedScope}.`
+        status.textContent = `Backend v${backendVersion} accepted ${acceptedScope}${acceptedBatch}.`
         progressPanel.hidden = false
         progressBar.removeAttribute('value')
         progressLabel.textContent = 'Collecting character cards…'
@@ -1096,6 +1195,11 @@ export function setup(ctx: SpindleFrontendContext) {
     thresholdControl.destroy()
     searchControl.destroy()
     searchScopeControl.destroy()
+    batchModeSelect.removeEventListener('change', onBatchModeChange)
+    batchSizeInput.removeEventListener('change', onBatchSettingsChange)
+    batchStartInput.removeEventListener('change', onBatchSettingsChange)
+    previousBatchButton.removeEventListener('click', onPreviousBatch)
+    nextBatchButton.removeEventListener('click', onNextBatch)
     tab.destroy()
     removeStyle()
   }

@@ -60,51 +60,60 @@ function trigrams(value) {
   }
   return grams;
 }
-function sorensenDice(left, right) {
-  if (!left && !right)
+function prepareCanonicalFields(fields) {
+  return Object.fromEntries(CORE_FIELD_KEYS.map((key) => [
+    key,
+    { value: fields[key], grams: trigrams(fields[key]) }
+  ]));
+}
+function preparedDice(left, right) {
+  if (!left.value && !right.value)
     return 0;
-  if (left === right)
+  if (left.value === right.value)
     return 1;
-  const leftGrams = trigrams(left);
-  const rightGrams = trigrams(right);
-  if (leftGrams.size === 0 || rightGrams.size === 0)
+  if (left.grams.size === 0 || right.grams.size === 0)
     return 0;
   let intersection = 0;
-  for (const gram of leftGrams) {
-    if (rightGrams.has(gram))
+  const smaller = left.grams.size <= right.grams.size ? left.grams : right.grams;
+  const larger = smaller === left.grams ? right.grams : left.grams;
+  for (const gram of smaller) {
+    if (larger.has(gram))
       intersection += 1;
   }
-  return 2 * intersection / (leftGrams.size + rightGrams.size);
+  return 2 * intersection / (left.grams.size + right.grams.size);
 }
 function characterSimilarity(left, right) {
-  const leftFields = canonicalCoreFields(left);
-  const rightFields = canonicalCoreFields(right);
-  let weightedScore = 0;
-  let totalWeight = 0;
-  for (const key of CORE_FIELD_KEYS) {
-    const leftValue = leftFields[key];
-    const rightValue = rightFields[key];
-    if (!leftValue && !rightValue)
-      continue;
-    const weight = Math.max(leftValue.length, rightValue.length, 1);
-    weightedScore += sorensenDice(leftValue, rightValue) * weight;
-    totalWeight += weight;
-  }
-  return totalWeight === 0 ? 0 : weightedScore / totalWeight;
+  return canonicalSimilarity(prepareCanonicalFields(canonicalCoreFields(left)), prepareCanonicalFields(canonicalCoreFields(right)));
 }
-function canonicalSimilarity(leftFields, rightFields) {
+function canonicalSimilarity(leftFields, rightFields, threshold) {
   let weightedScore = 0;
   let totalWeight = 0;
+  let maximumWeightedScore = 0;
   for (const key of CORE_FIELD_KEYS) {
-    const leftValue = leftFields[key];
-    const rightValue = rightFields[key];
+    const left = leftFields[key];
+    const right = rightFields[key];
+    const leftValue = left.value;
+    const rightValue = right.value;
     if (!leftValue && !rightValue)
       continue;
     const weight = Math.max(leftValue.length, rightValue.length, 1);
-    weightedScore += sorensenDice(leftValue, rightValue) * weight;
     totalWeight += weight;
+    const maximumDice = leftValue === rightValue ? 1 : left.grams.size === 0 || right.grams.size === 0 ? 0 : 2 * Math.min(left.grams.size, right.grams.size) / (left.grams.size + right.grams.size);
+    maximumWeightedScore += maximumDice * weight;
   }
-  return totalWeight === 0 ? 0 : weightedScore / totalWeight;
+  if (totalWeight === 0)
+    return 0;
+  if (threshold !== undefined && maximumWeightedScore / totalWeight < threshold)
+    return 0;
+  for (const key of CORE_FIELD_KEYS) {
+    const left = leftFields[key];
+    const right = rightFields[key];
+    if (!left.value && !right.value)
+      continue;
+    const weight = Math.max(left.value.length, right.value.length, 1);
+    weightedScore += preparedDice(left, right) * weight;
+  }
+  return weightedScore / totalWeight;
 }
 function pairAll(ids) {
   const pairs = [];
@@ -194,7 +203,7 @@ async function findDuplicateGroupsAsync(characters, mode, similarityThreshold, s
   }
   const threshold = Math.min(1, Math.max(0, similarityThreshold));
   const parent = new Map(characters.map((character) => [character.id, character.id]));
-  const fields = characters.map(canonicalCoreFields);
+  const fields = characters.map((character) => prepareCanonicalFields(canonicalCoreFields(character)));
   const matches = [];
   const operatedIndexes = operatedCharacterIds ? characters.flatMap((character, index) => operatedCharacterIds.has(character.id) ? [index] : []) : characters.map((_character, index) => index);
   const unoperatedIndexes = operatedCharacterIds ? characters.flatMap((character, index) => operatedCharacterIds.has(character.id) ? [] : [index]) : [];
@@ -215,7 +224,7 @@ async function findDuplicateGroupsAsync(characters, mode, similarityThreshold, s
   const comparePair = (left, right) => {
     if (signal?.aborted)
       throw new Error("SCAN_CANCELLED");
-    const similarity = canonicalSimilarity(fields[left], fields[right]);
+    const similarity = canonicalSimilarity(fields[left], fields[right], threshold);
     if (similarity >= threshold) {
       const leftId = characters[left].id;
       const rightId = characters[right].id;
@@ -678,13 +687,16 @@ async function enrichCharacter(api, character, features, availabilityState, lore
     warnings
   };
 }
-async function scanDuplicates(api, features, mode, similarityThreshold, signal, onProgress, filterQuery = "", searchField = "name") {
+async function scanDuplicates(api, features, mode, similarityThreshold, signal, onProgress, filterQuery = "", searchField = "name", batchSize, batchOffset = 0) {
   if (!features.characters)
     throw new Error("PERMISSION_DENIED: characters");
   onProgress?.("collecting", 0, 0);
   const allCharacters = await listAllCharacters(api, signal, onProgress);
   checkCancelled(signal);
-  const operatedCharacters = allCharacters.filter((character) => matchesWildcardSearch(searchFieldValues(character, searchField), filterQuery));
+  const matchingCharacters = allCharacters.filter((character) => matchesWildcardSearch(searchFieldValues(character, searchField), filterQuery)).sort((left, right) => normalizeName(left.name).localeCompare(normalizeName(right.name)) || left.id.localeCompare(right.id));
+  const effectiveBatchSize = batchSize === undefined ? undefined : Math.min(1000, Math.max(1, Math.floor(batchSize)));
+  const effectiveBatchOffset = effectiveBatchSize === undefined ? 0 : Math.min(Math.max(0, Math.floor(batchOffset)), matchingCharacters.length);
+  const operatedCharacters = effectiveBatchSize === undefined ? matchingCharacters : matchingCharacters.slice(effectiveBatchOffset, effectiveBatchOffset + effectiveBatchSize);
   const operatedCharacterIds = new Set(operatedCharacters.map((character) => character.id));
   const characters = allCharacters;
   const unfilteredCharacters = characters.length - operatedCharacters.length;
@@ -718,6 +730,9 @@ async function scanDuplicates(api, features, mode, similarityThreshold, signal, 
   return {
     groups,
     totalCharacters: operatedCharacters.length,
+    scopeTotalCharacters: matchingCharacters.length,
+    scopeOffset: effectiveBatchOffset,
+    scopeLimit: effectiveBatchSize ?? null,
     duplicateCharacters: duplicateIds.size,
     availability: availabilityState,
     scannedAt: Math.floor(Date.now() / 1000)
@@ -802,7 +817,7 @@ async function deleteCharacterSafely(api, characterId, expectedUpdatedAt) {
 
 // src/backend.ts
 var activeScans = new Map;
-var EXTENSION_VERSION = "0.5.6";
+var EXTENSION_VERSION = "0.6.0";
 function scanOwnerKey(userId) {
   return userId ?? "__extension_owner__";
 }
@@ -842,7 +857,7 @@ function isFrontendRequest(payload) {
     return true;
   if (type === "scan_duplicates") {
     const request = payload;
-    return typeof request.requestId === "string" && isMatchMode(request.mode) && (request.filterQuery === undefined || typeof request.filterQuery === "string") && (request.searchField === undefined || isSearchField(request.searchField));
+    return typeof request.requestId === "string" && isMatchMode(request.mode) && (request.filterQuery === undefined || typeof request.filterQuery === "string") && (request.searchField === undefined || isSearchField(request.searchField)) && (request.batchSize === undefined || typeof request.batchSize === "number" && Number.isFinite(request.batchSize)) && (request.batchOffset === undefined || typeof request.batchOffset === "number" && Number.isFinite(request.batchOffset));
   }
   if (type === "cancel_scan") {
     const request = payload;
@@ -874,16 +889,18 @@ async function handleScan(request, userId) {
     requestId: request.requestId,
     backendVersion: EXTENSION_VERSION,
     filterQuery: request.filterQuery ?? "",
-    searchField: request.searchField ?? "name"
+    searchField: request.searchField ?? "name",
+    ...request.batchSize === undefined ? {} : { batchSize: request.batchSize },
+    ...request.batchOffset === undefined ? {} : { batchOffset: request.batchOffset }
   }, userId);
-  spindle.log.info(`Starting ${request.mode} scan for ${request.searchField ?? "name"}=${JSON.stringify(request.filterQuery ?? "")}.`);
+  spindle.log.info(`Starting ${request.mode} scan for ${request.searchField ?? "name"}=${JSON.stringify(request.filterQuery ?? "")}` + (request.batchSize === undefined ? "." : `, batch offset ${request.batchOffset ?? 0}, size ${request.batchSize}.`));
   try {
     const threshold = Number.isFinite(request.similarityThreshold) ? Math.min(1, Math.max(0.75, request.similarityThreshold)) : 0.9;
     const result = await scanDuplicates(scannerApiFor(userId), grantedFeatures(), request.mode, threshold, controller.signal, (phase, current, total) => {
       if (!controller.signal.aborted) {
         send({ type: "scan_progress", requestId: request.requestId, phase, current, total }, userId);
       }
-    }, request.filterQuery ?? "", request.searchField ?? "name");
+    }, request.filterQuery ?? "", request.searchField ?? "name", request.batchSize, request.batchOffset ?? 0);
     if (controller.signal.aborted)
       return;
     send({ type: "scan_result", requestId: request.requestId, result }, userId);

@@ -11,7 +11,7 @@ import type {
 declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 
 const activeScans = new Map<string, { requestId: string; controller: AbortController }>()
-const EXTENSION_VERSION = '0.5.6'
+const EXTENSION_VERSION = '0.6.0'
 
 function scanOwnerKey(userId?: string): string {
   return userId ?? '__extension_owner__'
@@ -68,7 +68,11 @@ function isFrontendRequest(payload: unknown): payload is FrontendRequest {
       typeof request.requestId === 'string' &&
       isMatchMode(request.mode) &&
       (request.filterQuery === undefined || typeof request.filterQuery === 'string') &&
-      (request.searchField === undefined || isSearchField(request.searchField))
+      (request.searchField === undefined || isSearchField(request.searchField)) &&
+      (request.batchSize === undefined ||
+        (typeof request.batchSize === 'number' && Number.isFinite(request.batchSize))) &&
+      (request.batchOffset === undefined ||
+        (typeof request.batchOffset === 'number' && Number.isFinite(request.batchOffset)))
     )
   }
   if (type === 'cancel_scan') {
@@ -120,9 +124,12 @@ async function handleScan(
     backendVersion: EXTENSION_VERSION,
     filterQuery: request.filterQuery ?? '',
     searchField: request.searchField ?? 'name',
+    ...(request.batchSize === undefined ? {} : { batchSize: request.batchSize }),
+    ...(request.batchOffset === undefined ? {} : { batchOffset: request.batchOffset }),
   }, userId)
   spindle.log.info(
-    `Starting ${request.mode} scan for ${request.searchField ?? 'name'}=${JSON.stringify(request.filterQuery ?? '')}.`,
+    `Starting ${request.mode} scan for ${request.searchField ?? 'name'}=${JSON.stringify(request.filterQuery ?? '')}` +
+      (request.batchSize === undefined ? '.' : `, batch offset ${request.batchOffset ?? 0}, size ${request.batchSize}.`),
   )
   try {
     const threshold = Number.isFinite(request.similarityThreshold)
@@ -141,6 +148,8 @@ async function handleScan(
       },
       request.filterQuery ?? '',
       request.searchField ?? 'name',
+      request.batchSize,
+      request.batchOffset ?? 0,
     )
     if (controller.signal.aborted) return
     send({ type: 'scan_result', requestId: request.requestId, result }, userId)

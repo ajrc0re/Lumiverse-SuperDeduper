@@ -3,6 +3,7 @@ import {
   classifyExtensionPayload,
   compareKeeperCandidates,
   findDuplicateGroupsAsync,
+  normalizeName,
   recommendationReasons,
 } from './core'
 import type {
@@ -480,16 +481,27 @@ export async function scanDuplicates(
   onProgress?: ScanProgressCallback,
   filterQuery = '',
   searchField: SearchField = 'name',
+  batchSize?: number,
+  batchOffset = 0,
 ): Promise<ScanResult> {
   if (!features.characters) throw new Error('PERMISSION_DENIED: characters')
 
   onProgress?.('collecting', 0, 0)
   const allCharacters = await listAllCharacters(api, signal, onProgress)
   checkCancelled(signal)
-  const operatedCharacters = allCharacters.filter((character) => matchesWildcardSearch(
-    searchFieldValues(character, searchField),
-    filterQuery,
-  ))
+  const matchingCharacters = allCharacters
+    .filter((character) => matchesWildcardSearch(searchFieldValues(character, searchField), filterQuery))
+    .sort((left, right) => normalizeName(left.name).localeCompare(normalizeName(right.name)) ||
+      left.id.localeCompare(right.id))
+  const effectiveBatchSize = batchSize === undefined
+    ? undefined
+    : Math.min(1_000, Math.max(1, Math.floor(batchSize)))
+  const effectiveBatchOffset = effectiveBatchSize === undefined
+    ? 0
+    : Math.min(Math.max(0, Math.floor(batchOffset)), matchingCharacters.length)
+  const operatedCharacters = effectiveBatchSize === undefined
+    ? matchingCharacters
+    : matchingCharacters.slice(effectiveBatchOffset, effectiveBatchOffset + effectiveBatchSize)
   const operatedCharacterIds = new Set(operatedCharacters.map((character) => character.id))
   const characters = allCharacters
   const unfilteredCharacters = characters.length - operatedCharacters.length
@@ -545,6 +557,9 @@ export async function scanDuplicates(
   return {
     groups,
     totalCharacters: operatedCharacters.length,
+    scopeTotalCharacters: matchingCharacters.length,
+    scopeOffset: effectiveBatchOffset,
+    scopeLimit: effectiveBatchSize ?? null,
     duplicateCharacters: duplicateIds.size,
     availability: availabilityState,
     scannedAt: Math.floor(Date.now() / 1_000),

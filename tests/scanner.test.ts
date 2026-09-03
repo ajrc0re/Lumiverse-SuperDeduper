@@ -129,6 +129,26 @@ describe('duplicate scan orchestration', () => {
     expect(result.groups[0]?.cards.map((card) => card.id).sort()).toEqual(['a1', 't1'])
   })
 
+  test('batches filtered cards in deterministic name and ID order', async () => {
+    const cards = [
+      character('d', { name: 'Delta' }),
+      character('a', { name: 'Alpha' }),
+      character('c', { name: 'Charlie' }),
+      character('b', { name: 'Bravo' }),
+    ]
+    const { api } = createApi(cards)
+    const progress: Array<[string, number, number]> = []
+    const result = await scanDuplicates(api, {
+      characters: true, worldBooks: false, images: false, regexScripts: false,
+    }, 'similar', 0.9, undefined, (phase, current, total) => progress.push([phase, current, total]), '', 'name', 2, 1)
+
+    expect(result.totalCharacters).toBe(2)
+    expect(result.scopeTotalCharacters).toBe(4)
+    expect(result.scopeOffset).toBe(1)
+    expect(result.scopeLimit).toBe(2)
+    expect(progress.filter(([phase]) => phase === 'matching').every(([, , total]) => total === 5)).toBe(true)
+  })
+
   test('similarity matching yields progress while comparing many pairs', async () => {
     const cards = Array.from({ length: 33 }, (_, index) => character(String(index)))
     const { api } = createApi(cards)
