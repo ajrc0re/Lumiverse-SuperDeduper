@@ -89,7 +89,11 @@ typings/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# Lumiverse loads these bundles directly. Keep them versioned so extension
+# updates cannot leave an older compiled backend or frontend in place.
+!dist/
+!dist/backend.js
+!dist/frontend.js
 
 # Gatsby files
 .cache/

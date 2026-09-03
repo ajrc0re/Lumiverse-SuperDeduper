@@ -366,10 +366,10 @@ export function setup(ctx: SpindleFrontendContext) {
         element(
           'div',
           'sd-notice sd-notice--error',
-          'No scan response was received within 90 seconds.',
+          'The backend did not acknowledge the scan request within 15 seconds.',
         ),
       )
-    }, 90_000)
+    }, 15_000)
   }
 
   function renderSummary(result: ScanResult, visibleGroups: number): void {
@@ -698,7 +698,23 @@ export function setup(ctx: SpindleFrontendContext) {
       return
     }
     if (message.type === 'scan_started') {
-      if (message.requestId === currentScanRequestId) status.textContent = 'Scanning characters and candidate payloads…'
+      if (message.requestId === currentScanRequestId) {
+        status.textContent = 'Scanning the full character library and inspecting duplicate payloads…'
+        if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
+        scanTimeoutId = window.setTimeout(() => {
+          if (currentScanRequestId !== message.requestId) return
+          currentScanRequestId = null
+          scanButton.disabled = !charactersAvailable
+          status.textContent = 'The acknowledged scan did not finish within 10 minutes.'
+          results.replaceChildren(
+            element(
+              'div',
+              'sd-notice sd-notice--error',
+              'The backend started this scan but did not return a result. Check the Lumiverse server log for the extension error.',
+            ),
+          )
+        }, 600_000)
+      }
       return
     }
     if (message.type === 'scan_result') {
