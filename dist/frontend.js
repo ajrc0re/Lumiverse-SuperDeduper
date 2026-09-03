@@ -25,6 +25,11 @@ function matchesWildcardSearch(values, query) {
   return normalizedValues.some((value) => matcher.test(value));
 }
 
+// src/group-selection.ts
+function activeGroupsForBulk(groups, deactivatedGroupIds) {
+  return groups.filter((group) => !deactivatedGroupIds.has(group.id));
+}
+
 // src/types.ts
 var CORE_FIELD_KEYS = [
   "description",
@@ -119,6 +124,7 @@ function setup(ctx) {
     .sd-notice--error { border-color: var(--lumiverse-danger, #c84646); }
     .sd-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .sd-group { border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); overflow: hidden; background: var(--lumiverse-fill-subtle); }
+    .sd-group--inactive { opacity: .62; border-style: dashed; }
     .sd-group-header { padding: 12px; border-bottom: 1px solid var(--lumiverse-border); cursor: pointer; }
     .sd-group-header-content { display: flex; flex-direction: column; gap: 8px; margin-left: 6px; }
     .sd-group:not([open]) .sd-group-header { border-bottom: 0; }
@@ -287,6 +293,7 @@ function setup(ctx) {
   let backendStatusTimeoutId = null;
   const selectedKeepers = new Map;
   const collapsedGroups = new Set;
+  const deactivatedGroups = new Set;
   function updateScanButton() {
     const scanning = currentScanRequestId !== null;
     scanButton.textContent = scanning ? "Stop search" : "Scan characters";
@@ -575,11 +582,15 @@ function setup(ctx) {
     if (approximate)
       addBadge(summary, "Some token counts approximate", "warning");
     if (result.groups.length > 0) {
+      const activeGroups = activeGroupsForBulk(result.groups, deactivatedGroups);
+      if (activeGroups.length !== result.groups.length) {
+        addBadge(summary, `${result.groups.length - activeGroups.length} groups deactivated`, "warning");
+      }
       const bulkButton = element("button", "sd-button sd-button--danger", "Delete all non-keepers");
       bulkButton.type = "button";
-      bulkButton.disabled = activeDeleteRequestId !== null;
+      bulkButton.disabled = activeDeleteRequestId !== null || activeGroups.length === 0;
       bulkButton.dataset.action = "delete-all-duplicates";
-      bulkButton.title = "Deletes every duplicate except the protected keeper selected in each group";
+      bulkButton.title = "Deletes every duplicate except the protected keeper in each active group";
       summary.append(bulkButton);
       summary.append(element("span", "sd-muted", "“Keep this card” changes the protected keeper for its group."));
     }
@@ -722,7 +733,8 @@ function setup(ctx) {
     return details;
   }
   function renderGroup(group, index) {
-    const groupElement = element("details", "sd-group");
+    const deactivated = deactivatedGroups.has(group.id);
+    const groupElement = element("details", `sd-group${deactivated ? " sd-group--inactive" : ""}`);
     groupElement.open = !collapsedGroups.has(group.id);
     groupElement.dataset.groupId = group.id;
     groupElement.addEventListener("toggle", () => {
@@ -736,12 +748,18 @@ function setup(ctx) {
     const title = element("div", "sd-group-title");
     title.append(element("h3", "", `Group ${index + 1} · ${group.cards.length} cards`));
     addBadge(title, group.mode === "name" ? "Name match" : group.mode === "exact" ? "Exact contents" : "Similar contents");
+    if (deactivated)
+      addBadge(title, "Excluded from bulk delete", "warning");
+    const activationButton = element("button", "sd-button sd-button--secondary", deactivated ? "Activate group" : "Deactivate group");
+    activationButton.type = "button";
+    activationButton.dataset.action = "toggle-group-active";
+    activationButton.dataset.groupId = group.id;
     const groupDeleteButton = element("button", "sd-button sd-button--danger", `Delete all Group ${index + 1} non-keepers`);
     groupDeleteButton.type = "button";
     groupDeleteButton.disabled = activeDeleteRequestId !== null;
     groupDeleteButton.dataset.action = "delete-group-duplicates";
     groupDeleteButton.dataset.groupId = group.id;
-    title.append(groupDeleteButton);
+    title.append(activationButton, groupDeleteButton);
     headerContent.append(title);
     const reasons = element("ul", "sd-reasons");
     for (const reason of group.recommendationReasons)
@@ -799,6 +817,7 @@ function setup(ctx) {
       currentResult = null;
       selectedKeepers.clear();
       collapsedGroups.clear();
+      deactivatedGroups.clear();
       searchQuery = "";
       try {
         searchControl.setValue?.("");
@@ -826,10 +845,21 @@ function setup(ctx) {
       renderResults();
       return;
     }
+    if (action === "toggle-group-active") {
+      const groupId = actionElement.dataset.groupId;
+      if (!groupId || !currentResult?.groups.some((group) => group.id === groupId))
+        return;
+      if (deactivatedGroups.has(groupId))
+        deactivatedGroups.delete(groupId);
+      else
+        deactivatedGroups.add(groupId);
+      renderResults();
+      return;
+    }
     if (action === "delete-all-duplicates" || action === "delete-group-duplicates") {
       if (!currentResult || activeDeleteRequestId)
         return;
-      const requestedGroups = action === "delete-group-duplicates" ? currentResult.groups.filter((group) => group.id === actionElement.dataset.groupId) : currentResult.groups;
+      const requestedGroups = action === "delete-group-duplicates" ? currentResult.groups.filter((group) => group.id === actionElement.dataset.groupId) : activeGroupsForBulk(currentResult.groups, deactivatedGroups);
       const cards = requestedGroups.flatMap((group) => {
         const keeperId = selectedKeepers.get(group.id) ?? group.recommendedKeeperId;
         return group.cards.filter((card) => card.id !== keeperId).map((card) => ({ characterId: card.id, expectedUpdatedAt: card.updatedAt, name: card.name }));
@@ -1003,6 +1033,7 @@ function setup(ctx) {
       currentScanRequestId = null;
       cancelRequestPending = false;
       currentResult = message.result;
+      deactivatedGroups.clear();
       activeDeleteRequestId = null;
       setPermissionState(message.result.availability);
       progressPanel.hidden = true;

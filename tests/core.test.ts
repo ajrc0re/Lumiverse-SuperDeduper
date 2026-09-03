@@ -11,6 +11,7 @@ import {
   sorensenDice,
 } from '../src/core'
 import { matchesWildcardSearch, searchFieldValues } from '../src/search'
+import { activeGroupsForBulk } from '../src/group-selection'
 import type { CardComparison, CharacterRecord, PayloadSummary } from '../src/types'
 
 test('result filtering supports asterisks as wildcards', () => {
@@ -28,6 +29,11 @@ test('search field selection returns only the requested card property', () => {
   expect(searchFieldValues(card, 'creator')).toEqual(['Tom'])
   expect(searchFieldValues(card, 'tag')).toEqual(['Fantasy'])
   expect(searchFieldValues(card, 'id')).toEqual(['card-1'])
+})
+
+test('bulk group selection excludes deactivated groups', () => {
+  const groups = [{ id: 'active' }, { id: 'inactive' }]
+  expect(activeGroupsForBulk(groups, new Set(['inactive']))).toEqual([{ id: 'active' }])
 })
 
 function character(overrides: Partial<CharacterRecord> = {}): CharacterRecord {

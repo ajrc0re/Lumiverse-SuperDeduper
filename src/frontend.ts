@@ -1,6 +1,7 @@
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 
 import { matchesWildcardSearch, searchFieldValues } from './search'
+import { activeGroupsForBulk } from './group-selection'
 import { CORE_FIELD_KEYS, type BackendResponse, type CardComparison, type DuplicateGroup, type MatchMode, type PermissionAvailability, type ScanResult, type SearchField } from './types'
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -95,6 +96,7 @@ export function setup(ctx: SpindleFrontendContext) {
     .sd-notice--error { border-color: var(--lumiverse-danger, #c84646); }
     .sd-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .sd-group { border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); overflow: hidden; background: var(--lumiverse-fill-subtle); }
+    .sd-group--inactive { opacity: .62; border-style: dashed; }
     .sd-group-header { padding: 12px; border-bottom: 1px solid var(--lumiverse-border); cursor: pointer; }
     .sd-group-header-content { display: flex; flex-direction: column; gap: 8px; margin-left: 6px; }
     .sd-group:not([open]) .sd-group-header { border-bottom: 0; }
@@ -283,6 +285,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let backendStatusTimeoutId: number | null = null
   const selectedKeepers = new Map<string, string>()
   const collapsedGroups = new Set<string>()
+  const deactivatedGroups = new Set<string>()
 
   function updateScanButton(): void {
     const scanning = currentScanRequestId !== null
@@ -592,11 +595,15 @@ export function setup(ctx: SpindleFrontendContext) {
     )
     if (approximate) addBadge(summary, 'Some token counts approximate', 'warning')
     if (result.groups.length > 0) {
+      const activeGroups = activeGroupsForBulk(result.groups, deactivatedGroups)
+      if (activeGroups.length !== result.groups.length) {
+        addBadge(summary, `${result.groups.length - activeGroups.length} groups deactivated`, 'warning')
+      }
       const bulkButton = element('button', 'sd-button sd-button--danger', 'Delete all non-keepers')
       bulkButton.type = 'button'
-      bulkButton.disabled = activeDeleteRequestId !== null
+      bulkButton.disabled = activeDeleteRequestId !== null || activeGroups.length === 0
       bulkButton.dataset.action = 'delete-all-duplicates'
-      bulkButton.title = 'Deletes every duplicate except the protected keeper selected in each group'
+      bulkButton.title = 'Deletes every duplicate except the protected keeper in each active group'
       summary.append(bulkButton)
       summary.append(element('span', 'sd-muted', '“Keep this card” changes the protected keeper for its group.'))
     }
@@ -788,7 +795,8 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function renderGroup(group: DuplicateGroup, index: number): HTMLElement {
-    const groupElement = element('details', 'sd-group')
+    const deactivated = deactivatedGroups.has(group.id)
+    const groupElement = element('details', `sd-group${deactivated ? ' sd-group--inactive' : ''}`)
     groupElement.open = !collapsedGroups.has(group.id)
     groupElement.dataset.groupId = group.id
     groupElement.addEventListener('toggle', () => {
@@ -800,12 +808,17 @@ export function setup(ctx: SpindleFrontendContext) {
     const title = element('div', 'sd-group-title')
     title.append(element('h3', '', `Group ${index + 1} · ${group.cards.length} cards`))
     addBadge(title, group.mode === 'name' ? 'Name match' : group.mode === 'exact' ? 'Exact contents' : 'Similar contents')
+    if (deactivated) addBadge(title, 'Excluded from bulk delete', 'warning')
+    const activationButton = element('button', 'sd-button sd-button--secondary', deactivated ? 'Activate group' : 'Deactivate group')
+    activationButton.type = 'button'
+    activationButton.dataset.action = 'toggle-group-active'
+    activationButton.dataset.groupId = group.id
     const groupDeleteButton = element('button', 'sd-button sd-button--danger', `Delete all Group ${index + 1} non-keepers`)
     groupDeleteButton.type = 'button'
     groupDeleteButton.disabled = activeDeleteRequestId !== null
     groupDeleteButton.dataset.action = 'delete-group-duplicates'
     groupDeleteButton.dataset.groupId = group.id
-    title.append(groupDeleteButton)
+    title.append(activationButton, groupDeleteButton)
     headerContent.append(title)
     const reasons = element('ul', 'sd-reasons')
     for (const reason of group.recommendationReasons) reasons.append(element('li', '', reason))
@@ -874,6 +887,7 @@ export function setup(ctx: SpindleFrontendContext) {
       currentResult = null
       selectedKeepers.clear()
       collapsedGroups.clear()
+      deactivatedGroups.clear()
       searchQuery = ''
       try { searchControl.setValue?.('') } catch { /* Native and older host controls need no reset hook. */ }
       status.textContent = 'Results cleared. Ready to scan the full character library.'
@@ -896,11 +910,19 @@ export function setup(ctx: SpindleFrontendContext) {
       renderResults()
       return
     }
+    if (action === 'toggle-group-active') {
+      const groupId = actionElement.dataset.groupId
+      if (!groupId || !currentResult?.groups.some((group) => group.id === groupId)) return
+      if (deactivatedGroups.has(groupId)) deactivatedGroups.delete(groupId)
+      else deactivatedGroups.add(groupId)
+      renderResults()
+      return
+    }
     if (action === 'delete-all-duplicates' || action === 'delete-group-duplicates') {
       if (!currentResult || activeDeleteRequestId) return
       const requestedGroups = action === 'delete-group-duplicates'
         ? currentResult.groups.filter((group) => group.id === actionElement.dataset.groupId)
-        : currentResult.groups
+        : activeGroupsForBulk(currentResult.groups, deactivatedGroups)
       const cards = requestedGroups.flatMap((group) => {
         const keeperId = selectedKeepers.get(group.id) ?? group.recommendedKeeperId
         return group.cards
@@ -1082,6 +1104,7 @@ export function setup(ctx: SpindleFrontendContext) {
       currentScanRequestId = null
       cancelRequestPending = false
       currentResult = message.result
+      deactivatedGroups.clear()
       activeDeleteRequestId = null
       setPermissionState(message.result.availability)
       progressPanel.hidden = true

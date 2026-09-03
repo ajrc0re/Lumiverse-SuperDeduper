@@ -11,7 +11,7 @@ import type {
 declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 
 const activeScans = new Map<string, { requestId: string; controller: AbortController }>()
-const EXTENSION_VERSION = '0.6.0'
+const EXTENSION_VERSION = '0.6.1'
 
 function scanOwnerKey(userId?: string): string {
   return userId ?? '__extension_owner__'
