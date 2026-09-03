@@ -354,6 +354,15 @@ function setup(ctx) {
     const approximate = result.groups.some((group) => group.cards.some((card) => card.tokens.card.approximate || card.tokens.payload.approximate));
     if (approximate)
       addBadge(summary, "Some token counts approximate", "warning");
+    if (result.groups.length > 0) {
+      const bulkButton = element("button", "sd-button sd-button--danger", "Delete all non-keepers");
+      bulkButton.type = "button";
+      bulkButton.disabled = activeDeleteRequestId !== null;
+      bulkButton.dataset.action = "delete-all-duplicates";
+      bulkButton.title = "Deletes every duplicate except the protected keeper selected in each group";
+      summary.append(bulkButton);
+      summary.append(element("span", "sd-muted", "“Keep this card” changes the protected keeper for its group."));
+    }
   }
   function cardMatchesSearch(card, query) {
     const haystack = [card.id, card.name, card.creator, ...card.tags].join(`
@@ -430,7 +439,7 @@ function setup(ctx) {
     }
     const cardActions = element("div", "sd-card-actions");
     const isKeeper = selectedKeepers.get(group.id) === card.id;
-    const keeperButton = element("button", "sd-button sd-button--secondary", isKeeper ? "Protected keeper" : "Keep this card");
+    const keeperButton = element("button", "sd-button sd-button--secondary", isKeeper ? "Protected keeper" : "Protect this card instead");
     keeperButton.type = "button";
     keeperButton.disabled = isKeeper;
     keeperButton.dataset.action = "protect-card";
@@ -545,6 +554,28 @@ function setup(ctx) {
         return;
       selectedKeepers.set(groupId, characterId);
       renderResults();
+      return;
+    }
+    if (action === "delete-all-duplicates") {
+      if (!currentResult || activeDeleteRequestId)
+        return;
+      const cards = currentResult.groups.flatMap((group) => {
+        const keeperId = selectedKeepers.get(group.id) ?? group.recommendedKeeperId;
+        return group.cards.filter((card) => card.id !== keeperId).map((card) => ({ characterId: card.id, expectedUpdatedAt: card.updatedAt, name: card.name }));
+      });
+      const uniqueCards = [...new Map(cards.map((card) => [card.characterId, card])).values()];
+      if (uniqueCards.length === 0)
+        return;
+      const requestId = crypto.randomUUID();
+      activeDeleteRequestId = requestId;
+      status.textContent = `Waiting for confirmation to delete ${uniqueCards.length} non-keeper duplicates…`;
+      renderResults();
+      ctx.sendToBackend({
+        type: "delete_duplicates",
+        requestId,
+        groupCount: currentResult.groups.length,
+        cards: uniqueCards
+      });
       return;
     }
     if (action === "delete-card") {
@@ -666,6 +697,25 @@ function setup(ctx) {
           staleNotice.textContent = "The scan is stale. Run a new scan before deleting.";
           staleNotice.hidden = false;
         }
+        renderResults();
+      }
+      return;
+    }
+    if (message.type === "bulk_delete_result") {
+      if (message.requestId !== activeDeleteRequestId)
+        return;
+      activeDeleteRequestId = null;
+      if (message.cancelled) {
+        status.textContent = "Bulk deletion cancelled. Nothing was deleted.";
+        renderResults();
+        return;
+      }
+      const detail = message.errors.length > 0 ? ` ${message.errors.slice(0, 3).join(" ")}` : "";
+      status.textContent = `Deleted ${message.deleted}; skipped ${message.skipped}.${detail}`;
+      if (message.deleted > 0) {
+        currentScanRequestId = null;
+        startScan();
+      } else {
         renderResults();
       }
     }

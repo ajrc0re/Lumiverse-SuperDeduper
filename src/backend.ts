@@ -1,5 +1,5 @@
 import { permissionAvailability, scanDuplicates, type ScannerApi } from './scanner'
-import { deleteCharacterSafely } from './deletion'
+import { deleteCharacterSafely, deleteCharactersSafely } from './deletion'
 import type {
   BackendResponse,
   CharacterRecord,
@@ -64,6 +64,19 @@ function isFrontendRequest(payload: unknown): payload is FrontendRequest {
       typeof request.requestId === 'string' &&
       typeof request.characterId === 'string' &&
       typeof request.expectedUpdatedAt === 'number'
+    )
+  }
+  if (type === 'delete_duplicates') {
+    const request = payload as Partial<Extract<FrontendRequest, { type: 'delete_duplicates' }>>
+    return (
+      typeof request.requestId === 'string' &&
+      typeof request.groupCount === 'number' &&
+      Array.isArray(request.cards) &&
+      request.cards.length > 0 &&
+      request.cards.every((card) =>
+        card && typeof card.characterId === 'string' &&
+        typeof card.expectedUpdatedAt === 'number' && typeof card.name === 'string',
+      )
     )
   }
   return false
@@ -160,14 +173,55 @@ async function handleDelete(
   }
 }
 
+async function handleBulkDelete(
+  request: Extract<FrontendRequest, { type: 'delete_duplicates' }>,
+  userId?: string,
+): Promise<void> {
+  const reply = (result: Omit<Extract<BackendResponse, { type: 'bulk_delete_result' }>, 'type' | 'requestId'>) => {
+    send({ type: 'bulk_delete_result', requestId: request.requestId, ...result }, userId)
+  }
+  try {
+    if (!spindle.permissions.has('characters')) {
+      reply({ deleted: 0, skipped: request.cards.length, cancelled: false, errors: ['The characters permission is required.'] })
+      return
+    }
+    const result = await deleteCharactersSafely(
+      {
+        getCharacter: async (id) => (await spindle.characters.get(id, userId)) as CharacterRecord | null,
+        deleteCharacter: (id) => spindle.characters.delete(id, userId),
+        confirm: async (characters) => {
+          const names = characters.slice(0, 12).map((character) => `• ${character.name} (${character.id})`)
+          const remainder = characters.length > names.length ? `\n…and ${characters.length - names.length} more.` : ''
+          const confirmation = await spindle.modal.confirm({
+            title: `Delete ${characters.length} non-keeper duplicates?`,
+            message: `Permanently delete ${characters.length} cards from ${request.groupCount} duplicate groups? Your selected protected keeper in every group will be retained.\n\n${names.join('\n')}${remainder}\n\nAttached resources will not be deleted separately.`,
+            variant: 'danger',
+            confirmLabel: `Delete ${characters.length} cards`,
+            cancelLabel: 'Cancel',
+            ...(userId ? { userId } : {}),
+          })
+          return confirmation.confirmed
+        },
+      },
+      request.cards,
+    )
+    reply(result)
+    if (result.deleted > 0) send({ type: 'results_stale', reason: `${result.deleted} duplicate cards were deleted.` }, userId)
+  } catch (error) {
+    reply({ deleted: 0, skipped: request.cards.length, cancelled: false, errors: [errorMessage(error)] })
+  }
+}
+
 spindle.onFrontendMessage((payload: unknown, userId?: string) => {
   if (!isFrontendRequest(payload)) return
   if (payload.type === 'get_status') {
     send({ type: 'status_result', availability: permissionAvailability(grantedFeatures()) }, userId)
   } else if (payload.type === 'scan_duplicates') {
     void handleScan(payload, userId)
-  } else {
+  } else if (payload.type === 'delete_card') {
     void handleDelete(payload, userId)
+  } else {
+    void handleBulkDelete(payload, userId)
   }
 })
 

@@ -582,6 +582,42 @@ async function scanDuplicates(api, features, mode, similarityThreshold) {
 }
 
 // src/deletion.ts
+async function deleteCharactersSafely(api, candidates) {
+  const unique = new Map(candidates.map((candidate) => [candidate.characterId, candidate]));
+  const eligible = [];
+  const errors = [];
+  for (const candidate of unique.values()) {
+    const character = await api.getCharacter(candidate.characterId);
+    if (!character || character.updated_at !== candidate.expectedUpdatedAt) {
+      errors.push(`${candidate.name} (${candidate.characterId}) was missing or changed.`);
+    } else {
+      eligible.push({ candidate, character });
+    }
+  }
+  if (eligible.length === 0) {
+    return { deleted: 0, skipped: unique.size, cancelled: false, errors };
+  }
+  if (!await api.confirm(eligible.map(({ character }) => character))) {
+    return { deleted: 0, skipped: unique.size, cancelled: true, errors };
+  }
+  let deleted = 0;
+  for (const { candidate } of eligible) {
+    const current = await api.getCharacter(candidate.characterId);
+    if (!current || current.updated_at !== candidate.expectedUpdatedAt) {
+      errors.push(`${candidate.name} (${candidate.characterId}) changed during confirmation.`);
+      continue;
+    }
+    try {
+      if (await api.deleteCharacter(candidate.characterId))
+        deleted += 1;
+      else
+        errors.push(`${candidate.name} (${candidate.characterId}) was not deleted.`);
+    } catch (error) {
+      errors.push(`${candidate.name} (${candidate.characterId}): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { deleted, skipped: unique.size - deleted, cancelled: false, errors };
+}
 async function deleteCharacterSafely(api, characterId, expectedUpdatedAt) {
   const current = await api.getCharacter(characterId);
   if (!current) {
@@ -661,6 +697,10 @@ function isFrontendRequest(payload) {
     const request = payload;
     return typeof request.requestId === "string" && typeof request.characterId === "string" && typeof request.expectedUpdatedAt === "number";
   }
+  if (type === "delete_duplicates") {
+    const request = payload;
+    return typeof request.requestId === "string" && typeof request.groupCount === "number" && Array.isArray(request.cards) && request.cards.length > 0 && request.cards.every((card) => card && typeof card.characterId === "string" && typeof card.expectedUpdatedAt === "number" && typeof card.name === "string");
+  }
   return false;
 }
 function errorMessage2(error) {
@@ -727,6 +767,45 @@ async function handleDelete(request, userId) {
     });
   }
 }
+async function handleBulkDelete(request, userId) {
+  const reply = (result) => {
+    send({ type: "bulk_delete_result", requestId: request.requestId, ...result }, userId);
+  };
+  try {
+    if (!spindle.permissions.has("characters")) {
+      reply({ deleted: 0, skipped: request.cards.length, cancelled: false, errors: ["The characters permission is required."] });
+      return;
+    }
+    const result = await deleteCharactersSafely({
+      getCharacter: async (id) => await spindle.characters.get(id, userId),
+      deleteCharacter: (id) => spindle.characters.delete(id, userId),
+      confirm: async (characters) => {
+        const names = characters.slice(0, 12).map((character) => `\u2022 ${character.name} (${character.id})`);
+        const remainder = characters.length > names.length ? `
+\u2026and ${characters.length - names.length} more.` : "";
+        const confirmation = await spindle.modal.confirm({
+          title: `Delete ${characters.length} non-keeper duplicates?`,
+          message: `Permanently delete ${characters.length} cards from ${request.groupCount} duplicate groups? Your selected protected keeper in every group will be retained.
+
+${names.join(`
+`)}${remainder}
+
+Attached resources will not be deleted separately.`,
+          variant: "danger",
+          confirmLabel: `Delete ${characters.length} cards`,
+          cancelLabel: "Cancel",
+          ...userId ? { userId } : {}
+        });
+        return confirmation.confirmed;
+      }
+    }, request.cards);
+    reply(result);
+    if (result.deleted > 0)
+      send({ type: "results_stale", reason: `${result.deleted} duplicate cards were deleted.` }, userId);
+  } catch (error) {
+    reply({ deleted: 0, skipped: request.cards.length, cancelled: false, errors: [errorMessage2(error)] });
+  }
+}
 spindle.onFrontendMessage((payload, userId) => {
   if (!isFrontendRequest(payload))
     return;
@@ -734,8 +813,10 @@ spindle.onFrontendMessage((payload, userId) => {
     send({ type: "status_result", availability: permissionAvailability(grantedFeatures()) }, userId);
   } else if (payload.type === "scan_duplicates") {
     handleScan(payload, userId);
-  } else {
+  } else if (payload.type === "delete_card") {
     handleDelete(payload, userId);
+  } else {
+    handleBulkDelete(payload, userId);
   }
 });
 var staleEvents = [

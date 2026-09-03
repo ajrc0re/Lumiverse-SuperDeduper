@@ -160,6 +160,12 @@ export type FrontendRequest =
       characterId: string
       expectedUpdatedAt: number
     }
+  | {
+      type: 'delete_duplicates'
+      requestId: string
+      groupCount: number
+      cards: Array<{ characterId: string; expectedUpdatedAt: number; name: string }>
+    }
 
 export type BackendResponse =
   | { type: 'status_result'; availability: PermissionAvailability }
@@ -175,4 +181,12 @@ export type BackendResponse =
       cancelled: boolean
       stale: boolean
       error?: string
+    }
+  | {
+      type: 'bulk_delete_result'
+      requestId: string
+      deleted: number
+      skipped: number
+      cancelled: boolean
+      errors: string[]
     }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { deleteCharacterSafely, type DeletionApi } from '../src/deletion'
+import { deleteCharacterSafely, deleteCharactersSafely, type DeletionApi } from '../src/deletion'
 import type { CharacterRecord } from '../src/types'
 
 function character(updatedAt = 20): CharacterRecord {
@@ -63,5 +63,39 @@ describe('safe character deletion', () => {
   test('deletes an unchanged confirmed card', async () => {
     const result = await deleteCharacterSafely(api(), 'card-1', 20)
     expect(result).toEqual({ deleted: true, cancelled: false, stale: false })
+  })
+})
+
+describe('safe bulk character deletion', () => {
+  test('confirms once, rechecks every card, and skips stale cards', async () => {
+    const records = new Map([
+      ['card-1', character(20)],
+      ['card-2', { ...character(21), id: 'card-2', name: 'Second' }],
+    ])
+    let confirmations = 0
+    const deleted: string[] = []
+    const result = await deleteCharactersSafely({
+      getCharacter: async (id) => records.get(id) ?? null,
+      confirm: async (characters) => { confirmations += 1; expect(characters).toHaveLength(1); return true },
+      deleteCharacter: async (id) => { deleted.push(id); return true },
+    }, [
+      { characterId: 'card-1', expectedUpdatedAt: 20, name: 'Card' },
+      { characterId: 'card-2', expectedUpdatedAt: 20, name: 'Second' },
+    ])
+    expect(confirmations).toBe(1)
+    expect(deleted).toEqual(['card-1'])
+    expect(result.deleted).toBe(1)
+    expect(result.skipped).toBe(1)
+  })
+
+  test('deletes nothing when bulk confirmation is cancelled', async () => {
+    let deletes = 0
+    const result = await deleteCharactersSafely({
+      getCharacter: async () => character(),
+      confirm: async () => false,
+      deleteCharacter: async () => { deletes += 1; return true },
+    }, [{ characterId: 'card-1', expectedUpdatedAt: 20, name: 'Card' }])
+    expect(result.cancelled).toBe(true)
+    expect(deletes).toBe(0)
   })
 })
