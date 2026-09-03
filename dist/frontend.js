@@ -391,22 +391,7 @@ function setup(ctx) {
   } catch {
     thresholdControl = nativeThresholdControl();
   }
-  let searchControl;
-  try {
-    if (typeof components?.mountTextInput !== "function")
-      throw new Error("Unavailable");
-    searchControl = components.mountTextInput(searchSlot, {
-      value: "",
-      placeholder: "Search text (* wildcard supported)",
-      ariaLabel: "Filter duplicate results",
-      onChange: (value) => {
-        searchQuery = value;
-        renderResults();
-      }
-    });
-  } catch {
-    searchControl = nativeSearchControl();
-  }
+  const searchControl = nativeSearchControl();
   let searchScopeControl;
   try {
     if (typeof components?.mountSelect !== "function")
@@ -465,8 +450,7 @@ function setup(ctx) {
       status.textContent = "A scan is already in progress.";
       return;
     }
-    const renderedSearchInput = searchSlot.querySelector("input");
-    searchQuery = renderedSearchInput?.value ?? searchControl.getValue();
+    searchQuery = searchControl.getValue();
     const requestId = createRequestId();
     currentScanRequestId = requestId;
     cancelRequestPending = false;

@@ -382,21 +382,9 @@ export function setup(ctx: SpindleFrontendContext) {
     thresholdControl = nativeThresholdControl()
   }
 
-  let searchControl: Control<string>
-  try {
-    if (typeof components?.mountTextInput !== 'function') throw new Error('Unavailable')
-    searchControl = components.mountTextInput(searchSlot, {
-      value: '',
-      placeholder: 'Search text (* wildcard supported)',
-      ariaLabel: 'Filter duplicate results',
-      onChange: (value) => {
-        searchQuery = value
-        renderResults()
-      },
-    })
-  } catch {
-    searchControl = nativeSearchControl()
-  }
+  // Keep direct ownership of the search value. Some host component versions render
+  // the visible value without updating either onChange or getValue for extensions.
+  const searchControl = nativeSearchControl()
 
   let searchScopeControl: Control<SearchField>
   try {
@@ -464,8 +452,7 @@ export function setup(ctx: SpindleFrontendContext) {
       status.textContent = 'A scan is already in progress.'
       return
     }
-    const renderedSearchInput = searchSlot.querySelector<HTMLInputElement>('input')
-    searchQuery = renderedSearchInput?.value ?? searchControl.getValue()
+    searchQuery = searchControl.getValue()
     const requestId = createRequestId()
     currentScanRequestId = requestId
     cancelRequestPending = false
