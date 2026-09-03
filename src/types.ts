@@ -172,8 +172,14 @@ export type FrontendRequest =
     }
 
 export type BackendResponse =
-  | { type: 'status_result'; availability: PermissionAvailability }
-  | { type: 'scan_started'; requestId: string }
+  | { type: 'status_result'; availability: PermissionAvailability; backendVersion?: string }
+  | {
+      type: 'scan_started'
+      requestId: string
+      backendVersion?: string
+      filterQuery?: string
+      searchField?: SearchField
+    }
   | {
       type: 'scan_progress'
       requestId: string

@@ -850,7 +850,10 @@ function setup(ctx) {
     const message = payload;
     if (message.type === "status_result") {
       setPermissionState(message.availability);
-      status.textContent = charactersAvailable ? "Ready to scan." : "Characters permission required.";
+      if (!currentScanRequestId) {
+        const version = message.backendVersion ? ` Backend v${message.backendVersion}.` : " Backend version unavailable.";
+        status.textContent = charactersAvailable ? `Ready to scan.${version}` : `Characters permission required.${version}`;
+      }
       return;
     }
     if (message.type === "results_stale") {
@@ -862,7 +865,10 @@ function setup(ctx) {
     }
     if (message.type === "scan_started") {
       if (message.requestId === currentScanRequestId) {
-        status.textContent = "Scanning the full character library and inspecting duplicate payloads…";
+        const acceptedQuery = message.filterQuery?.trim();
+        const acceptedScope = acceptedQuery ? `${message.searchField ?? "name"}=${JSON.stringify(message.filterQuery)}` : "the full library";
+        const backendVersion = message.backendVersion ?? "unknown";
+        status.textContent = `Backend v${backendVersion} accepted ${acceptedScope}.`;
         progressPanel.hidden = false;
         progressBar.removeAttribute("value");
         progressLabel.textContent = "Collecting character cards…";

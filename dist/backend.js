@@ -790,6 +790,7 @@ async function deleteCharacterSafely(api, characterId, expectedUpdatedAt) {
 
 // src/backend.ts
 var activeScans = new Map;
+var EXTENSION_VERSION = "0.5.6";
 function scanOwnerKey(userId) {
   return userId ?? "__extension_owner__";
 }
@@ -856,7 +857,14 @@ async function handleScan(request, userId) {
   }
   const controller = new AbortController;
   activeScans.set(ownerKey, { requestId: request.requestId, controller });
-  send({ type: "scan_started", requestId: request.requestId }, userId);
+  send({
+    type: "scan_started",
+    requestId: request.requestId,
+    backendVersion: EXTENSION_VERSION,
+    filterQuery: request.filterQuery ?? "",
+    searchField: request.searchField ?? "name"
+  }, userId);
+  spindle.log.info(`Starting ${request.mode} scan for ${request.searchField ?? "name"}=${JSON.stringify(request.filterQuery ?? "")}.`);
   try {
     const threshold = Number.isFinite(request.similarityThreshold) ? Math.min(1, Math.max(0.75, request.similarityThreshold)) : 0.9;
     const result = await scanDuplicates(scannerApiFor(userId), grantedFeatures(), request.mode, threshold, controller.signal, (phase, current, total) => {
@@ -1004,7 +1012,7 @@ spindle.onFrontendMessage((payload, userId) => {
   if (!isFrontendRequest(payload))
     return;
   if (payload.type === "get_status") {
-    send({ type: "status_result", availability: permissionAvailability(grantedFeatures()) }, userId);
+    send({ type: "status_result", availability: permissionAvailability(grantedFeatures()), backendVersion: EXTENSION_VERSION }, userId);
   } else if (payload.type === "scan_duplicates") {
     handleScan(payload, userId);
   } else if (payload.type === "cancel_scan") {
@@ -1038,7 +1046,7 @@ if (spindle.permissions.has("regex_scripts")) {
   });
 }
 spindle.permissions.onChanged(() => {
-  send({ type: "status_result", availability: permissionAvailability(grantedFeatures()) });
+  send({ type: "status_result", availability: permissionAvailability(grantedFeatures()), backendVersion: EXTENSION_VERSION });
   send({ type: "results_stale", reason: "Extension permissions changed after the last scan." });
 });
 spindle.log.info("Lumiverse SuperDeduper loaded.");
