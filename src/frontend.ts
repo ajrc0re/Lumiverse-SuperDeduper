@@ -145,7 +145,7 @@ export function setup(ctx: SpindleFrontendContext) {
   staleNotice.hidden = true
   root.append(staleNotice)
 
-  const controls = element('div', 'sd-controls')
+  const controls = element('form', 'sd-controls')
   const modeField = element('div', 'sd-field')
   const modeLabel = element('label', '', 'Match mode')
   const modeSlot = element('div', 'sd-component-slot')
@@ -165,15 +165,14 @@ export function setup(ctx: SpindleFrontendContext) {
   thresholdField.append(thresholdLabel, thresholdLine)
 
   const searchField = element('div', 'sd-field sd-field--wide')
-  const searchLabel = element('label', '', 'Filter duplicate results')
+  const searchLabel = element('label', '', 'Filter results after scanning (optional)')
   const searchSlot = element('div', 'sd-component-slot')
   searchField.append(searchLabel, searchSlot)
 
   const actions = element('div', 'sd-actions')
   const scanButton = element('button', 'sd-button', 'Scan characters')
-  scanButton.type = 'button'
-  scanButton.dataset.action = 'scan-characters'
-  const status = element('span', 'sd-muted', 'Connecting to extension backend…')
+  scanButton.type = 'submit'
+  const status = element('span', 'sd-muted', 'Scans your entire character library. Connecting to extension backend…')
   actions.append(scanButton, status)
   controls.append(modeField, thresholdField, searchField, actions)
   root.append(controls)
@@ -341,12 +340,22 @@ export function setup(ctx: SpindleFrontendContext) {
     scanButton.disabled = true
     status.textContent = 'Scan request sent…'
     staleNotice.hidden = true
-    ctx.sendToBackend({
-      type: 'scan_duplicates',
-      requestId,
-      mode: selectedMode,
-      similarityThreshold: thresholdControl.getValue() / 100,
-    })
+    try {
+      ctx.sendToBackend({
+        type: 'scan_duplicates',
+        requestId,
+        mode: selectedMode,
+        similarityThreshold: thresholdControl.getValue() / 100,
+      })
+    } catch (error) {
+      currentScanRequestId = null
+      scanButton.disabled = !charactersAvailable
+      status.textContent = 'Could not send the scan request.'
+      results.replaceChildren(
+        element('div', 'sd-notice sd-notice--error', error instanceof Error ? error.message : String(error)),
+      )
+      return
+    }
     if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
     scanTimeoutId = window.setTimeout(() => {
       if (currentScanRequestId !== requestId) return
@@ -615,10 +624,6 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function handleAction(action: string, actionElement: HTMLElement): void {
-    if (action === 'scan-characters') {
-      startScan()
-      return
-    }
     if (action === 'open-settings') {
       ctx.events.emit('open-settings', { view: 'extensions' })
       return
@@ -654,34 +659,24 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
-  let unbindActions: () => void
-  try {
-    const bindActionHandlers = (ctx.ui as typeof ctx.ui & {
-      events?: Partial<typeof ctx.ui.events>
-    }).events?.bindActionHandlers
-    if (typeof bindActionHandlers !== 'function') throw new Error('Unavailable')
-    unbindActions = bindActionHandlers.call(
-      ctx.ui.events,
-      root,
-      {
-        'scan-characters': ({ element: actionElement }) => handleAction('scan-characters', actionElement),
-        'open-settings': ({ element: actionElement }) => handleAction('open-settings', actionElement),
-        'protect-card': ({ element: actionElement }) => handleAction('protect-card', actionElement),
-        'delete-card': ({ element: actionElement }) => handleAction('delete-card', actionElement),
-      },
-      { attribute: 'data-action', events: ['click'] },
-    )
-  } catch {
-    const onClick = (event: Event) => {
-      const target = event.target instanceof Element
-        ? event.target.closest<HTMLElement>('[data-action]')
-        : null
-      if (!target || !root.contains(target) || target instanceof HTMLButtonElement && target.disabled) return
-      const action = target.dataset.action
-      if (action) handleAction(action, target)
-    }
-    root.addEventListener('click', onClick)
-    unbindActions = () => root.removeEventListener('click', onClick)
+  const onSubmit = (event: SubmitEvent) => {
+    event.preventDefault()
+    startScan()
+  }
+  controls.addEventListener('submit', onSubmit)
+
+  const onActionClick = (event: Event) => {
+    const target = event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-action]')
+      : null
+    if (!target || !root.contains(target) || target instanceof HTMLButtonElement && target.disabled) return
+    const action = target.dataset.action
+    if (action) handleAction(action, target)
+  }
+  root.addEventListener('click', onActionClick)
+  const unbindActions = () => {
+    controls.removeEventListener('submit', onSubmit)
+    root.removeEventListener('click', onActionClick)
   }
 
   const unsubscribe = ctx.onBackendMessage((payload: unknown) => {
