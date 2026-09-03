@@ -480,8 +480,8 @@ function setup(ctx) {
         requestId,
         mode: selectedMode,
         similarityThreshold: similarityThreshold / 100,
-        filterQuery: searchControl.getValue(),
-        searchField: searchScopeControl.getValue()
+        filterQuery: searchQuery,
+        searchField: selectedSearchField
       });
     } catch (error) {
       currentScanRequestId = null;
