@@ -41,6 +41,8 @@ function maxSimilarity(group: DuplicateGroup, cardId: string): number {
 }
 
 export function setup(ctx: SpindleFrontendContext) {
+  ctx.deferReady()
+
   const removeStyle = ctx.dom.addStyle(`
     .sd-root { padding: 14px; color: var(--lumiverse-text); display: flex; flex-direction: column; gap: 12px; }
     .sd-header h2 { margin: 0; font-size: 1.15rem; }
@@ -48,10 +50,10 @@ export function setup(ctx: SpindleFrontendContext) {
     .sd-controls { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr); gap: 10px; padding: 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); }
     .sd-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
     .sd-field label { font-size: .75rem; color: var(--lumiverse-text-muted); font-weight: 600; }
-    .sd-field input, .sd-field select { box-sizing: border-box; width: 100%; min-height: 36px; padding: 7px 9px; color: var(--lumiverse-text); background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); }
+    .sd-component-slot { min-width: 0; flex: 1; }
+    .sd-hidden { display: none !important; }
     .sd-field--wide { grid-column: 1 / -1; }
     .sd-threshold-line { display: flex; align-items: center; gap: 8px; }
-    .sd-threshold-line input { min-height: auto; padding: 0; }
     .sd-button { min-height: 36px; padding: 7px 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-accent, #7866ff); color: white; cursor: pointer; font-weight: 650; }
     .sd-button:disabled { cursor: not-allowed; opacity: .5; }
     .sd-button--secondary { background: var(--lumiverse-fill); color: var(--lumiverse-text); }
@@ -133,47 +135,32 @@ export function setup(ctx: SpindleFrontendContext) {
   const controls = element('div', 'sd-controls')
   const modeField = element('div', 'sd-field')
   const modeLabel = element('label', '', 'Match mode')
-  const modeSelect = element('select')
-  modeSelect.setAttribute('aria-label', 'Duplicate match mode')
+  const modeSlot = element('div', 'sd-component-slot')
   const modeOptions: Array<{ value: MatchMode; label: string }> = [
     { value: 'name', label: 'Names match' },
     { value: 'exact', label: 'Exact card contents' },
     { value: 'similar', label: 'Similar card contents' },
   ]
-  for (const optionData of modeOptions) {
-    const option = element('option', '', optionData.label)
-    option.value = optionData.value
-    modeSelect.append(option)
-  }
-  modeField.append(modeLabel, modeSelect)
+  modeField.append(modeLabel, modeSlot)
 
-  const thresholdField = element('div', 'sd-field')
+  const thresholdField = element('div', 'sd-field sd-hidden')
   const thresholdLabel = element('label', '', 'Similarity threshold')
   const thresholdLine = element('div', 'sd-threshold-line')
-  const thresholdInput = element('input')
-  thresholdInput.type = 'range'
-  thresholdInput.min = '75'
-  thresholdInput.max = '100'
-  thresholdInput.step = '1'
-  thresholdInput.value = '90'
-  thresholdInput.setAttribute('aria-label', 'Similarity threshold')
+  const thresholdSlot = element('div', 'sd-component-slot')
   const thresholdOutput = element('output', '', '90%')
-  thresholdLine.append(thresholdInput, thresholdOutput)
+  thresholdLine.append(thresholdSlot, thresholdOutput)
   thresholdField.append(thresholdLabel, thresholdLine)
-  thresholdField.hidden = true
 
   const searchField = element('div', 'sd-field sd-field--wide')
   const searchLabel = element('label', '', 'Filter duplicate results')
-  const searchInput = element('input')
-  searchInput.type = 'search'
-  searchInput.placeholder = 'Name, creator, tag, or character ID'
-  searchInput.disabled = true
-  searchField.append(searchLabel, searchInput)
+  const searchSlot = element('div', 'sd-component-slot')
+  searchField.append(searchLabel, searchSlot)
 
   const actions = element('div', 'sd-actions')
   const scanButton = element('button', 'sd-button', 'Scan characters')
   scanButton.type = 'button'
-  const status = element('span', 'sd-muted', 'Ready to scan.')
+  scanButton.dataset.action = 'scan-characters'
+  const status = element('span', 'sd-muted', 'Connecting to extension backend…')
   actions.append(scanButton, status)
   controls.append(modeField, thresholdField, searchField, actions)
   root.append(controls)
@@ -187,7 +174,45 @@ export function setup(ctx: SpindleFrontendContext) {
   let currentScanRequestId: string | null = null
   let activeDeleteRequestId: string | null = null
   let charactersAvailable = true
+  let selectedMode: MatchMode = 'name'
+  let searchQuery = ''
+  let scanTimeoutId: number | null = null
+  let backendStatusTimeoutId: number | null = null
   const selectedKeepers = new Map<string, string>()
+
+  const modeControl = ctx.components.mountSelect(modeSlot, {
+    value: selectedMode,
+    options: modeOptions,
+    ariaLabel: 'Duplicate match mode',
+    portal: true,
+    onChange: (value) => {
+      if (value !== 'name' && value !== 'exact' && value !== 'similar') return
+      selectedMode = value
+      thresholdField.classList.toggle('sd-hidden', value !== 'similar')
+    },
+  })
+  const thresholdControl = ctx.components.mountRangeSlider(thresholdSlot, {
+    min: 75,
+    max: 100,
+    step: 1,
+    integer: true,
+    value: 90,
+    onDragValue: (value) => {
+      if (value !== null) thresholdOutput.textContent = `${value}%`
+    },
+    onCommit: (value) => {
+      thresholdOutput.textContent = `${value}%`
+    },
+  })
+  const searchControl = ctx.components.mountTextInput(searchSlot, {
+    value: '',
+    placeholder: 'Name, creator, tag, or character ID',
+    ariaLabel: 'Filter duplicate results',
+    onChange: (value) => {
+      searchQuery = value
+      renderResults()
+    },
+  })
 
   function setPermissionState(availability: PermissionAvailability): void {
     charactersAvailable = availability.characters !== 'unavailable'
@@ -201,9 +226,7 @@ export function setup(ctx: SpindleFrontendContext) {
       )
       const settingsButton = element('button', 'sd-button sd-button--secondary', 'Open Extensions settings')
       settingsButton.type = 'button'
-      settingsButton.addEventListener('click', () => {
-        ctx.events.emit('open-settings', { view: 'extensions' })
-      })
+      settingsButton.dataset.action = 'open-settings'
       permissionNotice.append(settingsButton)
       return
     }
@@ -222,9 +245,7 @@ export function setup(ctx: SpindleFrontendContext) {
       )
       const settingsButton = element('button', 'sd-button sd-button--secondary', 'Review permissions')
       settingsButton.type = 'button'
-      settingsButton.addEventListener('click', () => {
-        ctx.events.emit('open-settings', { view: 'extensions' })
-      })
+      settingsButton.dataset.action = 'open-settings'
       permissionNotice.append(settingsButton)
     } else {
       permissionNotice.hidden = true
@@ -236,14 +257,28 @@ export function setup(ctx: SpindleFrontendContext) {
     const requestId = crypto.randomUUID()
     currentScanRequestId = requestId
     scanButton.disabled = true
-    status.textContent = 'Scanning characters…'
+    status.textContent = 'Scan request sent…'
     staleNotice.hidden = true
     ctx.sendToBackend({
       type: 'scan_duplicates',
       requestId,
-      mode: modeSelect.value as MatchMode,
-      similarityThreshold: Number(thresholdInput.value) / 100,
+      mode: selectedMode,
+      similarityThreshold: thresholdControl.getValue() / 100,
     })
+    if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
+    scanTimeoutId = window.setTimeout(() => {
+      if (currentScanRequestId !== requestId) return
+      currentScanRequestId = null
+      scanButton.disabled = !charactersAvailable
+      status.textContent = 'The backend did not respond. Reload or re-enable the extension, then try again.'
+      results.replaceChildren(
+        element(
+          'div',
+          'sd-notice sd-notice--error',
+          'No scan response was received within 90 seconds.',
+        ),
+      )
+    }, 90_000)
   }
 
   function renderSummary(result: ScanResult, visibleGroups: number): void {
@@ -367,37 +402,25 @@ export function setup(ctx: SpindleFrontendContext) {
     }
 
     const cardActions = element('div', 'sd-card-actions')
-    const keeperLabel = element('label')
-    const keeperRadio = element('input')
-    keeperRadio.type = 'radio'
-    keeperRadio.name = `keeper-${group.id}`
-    keeperRadio.value = card.id
-    keeperRadio.checked = selectedKeepers.get(group.id) === card.id
-    keeperRadio.addEventListener('change', () => {
-      if (keeperRadio.checked) {
-        selectedKeepers.set(group.id, card.id)
-        renderResults()
-      }
-    })
-    keeperLabel.append(keeperRadio, document.createTextNode(' Keep this card'))
+    const isKeeper = selectedKeepers.get(group.id) === card.id
+    const keeperButton = element(
+      'button',
+      'sd-button sd-button--secondary',
+      isKeeper ? 'Protected keeper' : 'Keep this card',
+    )
+    keeperButton.type = 'button'
+    keeperButton.disabled = isKeeper
+    keeperButton.dataset.action = 'protect-card'
+    keeperButton.dataset.groupId = group.id
+    keeperButton.dataset.characterId = card.id
 
     const deleteButton = element('button', 'sd-button sd-button--danger', 'Delete duplicate')
     deleteButton.type = 'button'
-    deleteButton.disabled = keeperRadio.checked || activeDeleteRequestId !== null
-    deleteButton.addEventListener('click', () => {
-      if (selectedKeepers.get(group.id) === card.id || activeDeleteRequestId) return
-      const requestId = crypto.randomUUID()
-      activeDeleteRequestId = requestId
-      status.textContent = `Waiting for deletion confirmation for ${card.name}…`
-      renderResults()
-      ctx.sendToBackend({
-        type: 'delete_card',
-        requestId,
-        characterId: card.id,
-        expectedUpdatedAt: card.updatedAt,
-      })
-    })
-    cardActions.append(keeperLabel, deleteButton)
+    deleteButton.disabled = isKeeper || activeDeleteRequestId !== null
+    deleteButton.dataset.action = 'delete-card'
+    deleteButton.dataset.groupId = group.id
+    deleteButton.dataset.characterId = card.id
+    cardActions.append(keeperButton, deleteButton)
     main.append(cardActions)
     cardElement.append(main)
     return cardElement
@@ -483,7 +506,7 @@ export function setup(ctx: SpindleFrontendContext) {
       return
     }
 
-    const query = searchInput.value.trim().toLocaleLowerCase()
+    const query = searchQuery.trim().toLocaleLowerCase()
     const visibleGroups = currentResult.groups.filter(
       (group) => !query || group.cards.some((card) => cardMatchesSearch(card, query)),
     )
@@ -509,20 +532,53 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
-  modeSelect.addEventListener('change', () => {
-    thresholdField.hidden = modeSelect.value !== 'similar'
-  })
-  thresholdInput.addEventListener('input', () => {
-    thresholdOutput.textContent = `${thresholdInput.value}%`
-  })
-  searchInput.addEventListener('input', renderResults)
-  scanButton.addEventListener('click', startScan)
+  const unbindActions = ctx.ui.events.bindActionHandlers(
+    root,
+    {
+      'scan-characters': () => startScan(),
+      'open-settings': () => ctx.events.emit('open-settings', { view: 'extensions' }),
+      'protect-card': ({ element: actionElement }) => {
+        const groupId = actionElement.dataset.groupId
+        const characterId = actionElement.dataset.characterId
+        if (!groupId || !characterId) return
+        selectedKeepers.set(groupId, characterId)
+        renderResults()
+      },
+      'delete-card': ({ element: actionElement }) => {
+        const groupId = actionElement.dataset.groupId
+        const characterId = actionElement.dataset.characterId
+        if (!groupId || !characterId || !currentResult || activeDeleteRequestId) return
+        if (selectedKeepers.get(groupId) === characterId) return
+        const card = currentResult.groups
+          .find((group) => group.id === groupId)
+          ?.cards.find((candidate) => candidate.id === characterId)
+        if (!card) return
+
+        const requestId = crypto.randomUUID()
+        activeDeleteRequestId = requestId
+        status.textContent = `Waiting for deletion confirmation for ${card.name}…`
+        renderResults()
+        ctx.sendToBackend({
+          type: 'delete_card',
+          requestId,
+          characterId: card.id,
+          expectedUpdatedAt: card.updatedAt,
+        })
+      },
+    },
+    { attribute: 'data-action', events: ['click'] },
+  )
 
   const unsubscribe = ctx.onBackendMessage((payload: unknown) => {
     if (!payload || typeof payload !== 'object' || !('type' in payload)) return
+    if (backendStatusTimeoutId !== null) {
+      window.clearTimeout(backendStatusTimeoutId)
+      backendStatusTimeoutId = null
+    }
     const message = payload as BackendResponse
     if (message.type === 'status_result') {
       setPermissionState(message.availability)
+      status.textContent = charactersAvailable ? 'Ready to scan.' : 'Characters permission required.'
       return
     }
     if (message.type === 'results_stale') {
@@ -537,11 +593,12 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     if (message.type === 'scan_result') {
       if (message.requestId !== currentScanRequestId) return
+      if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
+      scanTimeoutId = null
       currentScanRequestId = null
       currentResult = message.result
       activeDeleteRequestId = null
       setPermissionState(message.result.availability)
-      searchInput.disabled = false
       status.textContent = `Scan completed ${formatDate(message.result.scannedAt)}.`
       staleNotice.hidden = true
       renderResults()
@@ -549,6 +606,8 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     if (message.type === 'scan_error') {
       if (message.requestId !== currentScanRequestId) return
+      if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
+      scanTimeoutId = null
       currentScanRequestId = null
       scanButton.disabled = !charactersAvailable
       status.textContent = 'Scan failed.'
@@ -575,10 +634,24 @@ export function setup(ctx: SpindleFrontendContext) {
   })
 
   renderResults()
+  ctx.ready()
+  backendStatusTimeoutId = window.setTimeout(() => {
+    status.textContent = 'Backend not responding. Reload or re-enable the extension.'
+  }, 5_000)
   ctx.sendToBackend({ type: 'get_status' })
+  const unsubscribeActivation = tab.onActivate(() => {
+    ctx.sendToBackend({ type: 'get_status' })
+  })
 
   return () => {
+    if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
+    if (backendStatusTimeoutId !== null) window.clearTimeout(backendStatusTimeoutId)
+    unsubscribeActivation()
+    unbindActions()
     unsubscribe()
+    modeControl.destroy()
+    thresholdControl.destroy()
+    searchControl.destroy()
     tab.destroy()
     removeStyle()
   }
