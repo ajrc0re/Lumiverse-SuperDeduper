@@ -75,7 +75,9 @@ function setup(ctx) {
     .sd-notice--error { border-color: var(--lumiverse-danger, #c84646); }
     .sd-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .sd-group { border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); overflow: hidden; background: var(--lumiverse-fill-subtle); }
-    .sd-group-header { padding: 12px; border-bottom: 1px solid var(--lumiverse-border); display: flex; flex-direction: column; gap: 8px; }
+    .sd-group-header { padding: 12px; border-bottom: 1px solid var(--lumiverse-border); cursor: pointer; }
+    .sd-group-header-content { display: flex; flex-direction: column; gap: 8px; margin-left: 6px; }
+    .sd-group:not([open]) .sd-group-header { border-bottom: 0; }
     .sd-group-title { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
     .sd-group-title h3 { margin: 0; font-size: 1rem; }
     .sd-reasons { margin: 0; padding-left: 20px; font-size: .8rem; color: var(--lumiverse-text-muted); }
@@ -173,6 +175,7 @@ function setup(ctx) {
   let scanTimeoutId = null;
   let backendStatusTimeoutId = null;
   const selectedKeepers = new Map;
+  const collapsedGroups = new Set;
   const components = ctx.components;
   function nativeModeControl() {
     modeSlot.replaceChildren();
@@ -355,6 +358,11 @@ function setup(ctx) {
     if (approximate)
       addBadge(summary, "Some token counts approximate", "warning");
     if (result.groups.length > 0) {
+      const allCollapsed = visibleGroups > 0 && result.groups.filter((group) => !searchQuery.trim() || group.cards.some((card) => cardMatchesSearch(card, searchQuery.trim().toLocaleLowerCase()))).every((group) => collapsedGroups.has(group.id));
+      const collapseButton = element("button", "sd-button sd-button--secondary", allCollapsed ? "Expand all" : "Collapse all");
+      collapseButton.type = "button";
+      collapseButton.dataset.action = "toggle-all-groups";
+      summary.append(collapseButton);
       const bulkButton = element("button", "sd-button sd-button--danger", "Delete all non-keepers");
       bulkButton.type = "button";
       bulkButton.disabled = activeDeleteRequestId !== null;
@@ -504,16 +512,32 @@ function setup(ctx) {
     return details;
   }
   function renderGroup(group, index) {
-    const groupElement = element("section", "sd-group");
-    const headerElement = element("header", "sd-group-header");
+    const groupElement = element("details", "sd-group");
+    groupElement.open = !collapsedGroups.has(group.id);
+    groupElement.dataset.groupId = group.id;
+    groupElement.addEventListener("toggle", () => {
+      if (groupElement.open)
+        collapsedGroups.delete(group.id);
+      else
+        collapsedGroups.add(group.id);
+    });
+    const headerElement = element("summary", "sd-group-header");
+    const headerContent = element("div", "sd-group-header-content");
     const title = element("div", "sd-group-title");
     title.append(element("h3", "", `Group ${index + 1} · ${group.cards.length} cards`));
     addBadge(title, group.mode === "name" ? "Name match" : group.mode === "exact" ? "Exact contents" : "Similar contents");
-    headerElement.append(title);
+    const groupDeleteButton = element("button", "sd-button sd-button--danger", `Delete all Group ${index + 1} non-keepers`);
+    groupDeleteButton.type = "button";
+    groupDeleteButton.disabled = activeDeleteRequestId !== null;
+    groupDeleteButton.dataset.action = "delete-group-duplicates";
+    groupDeleteButton.dataset.groupId = group.id;
+    title.append(groupDeleteButton);
+    headerContent.append(title);
     const reasons = element("ul", "sd-reasons");
     for (const reason of group.recommendationReasons)
       reasons.append(element("li", "", reason));
-    headerElement.append(reasons);
+    headerContent.append(reasons);
+    headerElement.append(headerContent);
     groupElement.append(headerElement);
     const cards = element("div", "sd-cards");
     for (const card of group.cards)
@@ -556,10 +580,29 @@ function setup(ctx) {
       renderResults();
       return;
     }
-    if (action === "delete-all-duplicates") {
+    if (action === "toggle-all-groups") {
+      if (!currentResult)
+        return;
+      const groupElements = [...results.querySelectorAll("details.sd-group")];
+      const shouldExpand = groupElements.length > 0 && groupElements.every((group) => !group.open);
+      for (const groupElement of groupElements) {
+        groupElement.open = shouldExpand;
+        const groupId = groupElement.dataset.groupId;
+        if (groupId) {
+          if (shouldExpand)
+            collapsedGroups.delete(groupId);
+          else
+            collapsedGroups.add(groupId);
+        }
+      }
+      renderResults();
+      return;
+    }
+    if (action === "delete-all-duplicates" || action === "delete-group-duplicates") {
       if (!currentResult || activeDeleteRequestId)
         return;
-      const cards = currentResult.groups.flatMap((group) => {
+      const requestedGroups = action === "delete-group-duplicates" ? currentResult.groups.filter((group) => group.id === actionElement.dataset.groupId) : currentResult.groups;
+      const cards = requestedGroups.flatMap((group) => {
         const keeperId = selectedKeepers.get(group.id) ?? group.recommendedKeeperId;
         return group.cards.filter((card) => card.id !== keeperId).map((card) => ({ characterId: card.id, expectedUpdatedAt: card.updatedAt, name: card.name }));
       });
@@ -573,7 +616,7 @@ function setup(ctx) {
       ctx.sendToBackend({
         type: "delete_duplicates",
         requestId,
-        groupCount: currentResult.groups.length,
+        groupCount: requestedGroups.length,
         cards: uniqueCards
       });
       return;
@@ -609,6 +652,8 @@ function setup(ctx) {
     const target = event.target instanceof Element ? event.target.closest("[data-action]") : null;
     if (!target || !root.contains(target) || target instanceof HTMLButtonElement && target.disabled)
       return;
+    if (target.closest("summary"))
+      event.preventDefault();
     const action = target.dataset.action;
     if (action)
       handleAction(action, target);
