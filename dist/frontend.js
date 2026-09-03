@@ -465,11 +465,14 @@ function setup(ctx) {
       status.textContent = "A scan is already in progress.";
       return;
     }
+    const renderedSearchInput = searchSlot.querySelector("input");
+    searchQuery = renderedSearchInput?.value ?? searchControl.getValue();
     const requestId = createRequestId();
     currentScanRequestId = requestId;
     cancelRequestPending = false;
     updateScanButton();
-    status.textContent = "Scan request sent…";
+    const scopeDescription = searchQuery.trim() ? `${searchScopeOptions.find((option) => option.value === selectedSearchField)?.label ?? selectedSearchField}: ${searchQuery}` : "the full library";
+    status.textContent = `Scan request sent for ${scopeDescription}…`;
     progressPanel.hidden = false;
     progressBar.removeAttribute("value");
     progressLabel.textContent = "Waiting for the backend to start…";
