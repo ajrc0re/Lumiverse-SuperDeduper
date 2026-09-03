@@ -54,8 +54,7 @@ function isFrontendRequest(payload: unknown): payload is FrontendRequest {
     const request = payload as Partial<Extract<FrontendRequest, { type: 'scan_duplicates' }>>
     return (
       typeof request.requestId === 'string' &&
-      isMatchMode(request.mode) &&
-      typeof request.similarityThreshold === 'number'
+      isMatchMode(request.mode)
     )
   }
   if (type === 'delete_card') {
@@ -92,11 +91,14 @@ async function handleScan(
 ): Promise<void> {
   send({ type: 'scan_started', requestId: request.requestId }, userId)
   try {
+    const threshold = Number.isFinite(request.similarityThreshold)
+      ? Math.min(1, Math.max(0.75, request.similarityThreshold))
+      : 0.9
     const result = await scanDuplicates(
       scannerApiFor(userId),
       grantedFeatures(),
       request.mode,
-      request.similarityThreshold,
+      threshold,
     )
     send({ type: 'scan_result', requestId: request.requestId, result }, userId)
   } catch (error) {

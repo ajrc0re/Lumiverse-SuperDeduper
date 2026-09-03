@@ -691,7 +691,7 @@ function isFrontendRequest(payload) {
     return true;
   if (type === "scan_duplicates") {
     const request = payload;
-    return typeof request.requestId === "string" && isMatchMode(request.mode) && typeof request.similarityThreshold === "number";
+    return typeof request.requestId === "string" && isMatchMode(request.mode);
   }
   if (type === "delete_card") {
     const request = payload;
@@ -709,7 +709,8 @@ function errorMessage2(error) {
 async function handleScan(request, userId) {
   send({ type: "scan_started", requestId: request.requestId }, userId);
   try {
-    const result = await scanDuplicates(scannerApiFor(userId), grantedFeatures(), request.mode, request.similarityThreshold);
+    const threshold = Number.isFinite(request.similarityThreshold) ? Math.min(1, Math.max(0.75, request.similarityThreshold)) : 0.9;
+    const result = await scanDuplicates(scannerApiFor(userId), grantedFeatures(), request.mode, threshold);
     send({ type: "scan_result", requestId: request.requestId, result }, userId);
   } catch (error) {
     const message = errorMessage2(error);

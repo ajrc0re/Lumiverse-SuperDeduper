@@ -56,6 +56,11 @@ export function setup(ctx: SpindleFrontendContext) {
     .sd-root { padding: 14px; color: var(--lumiverse-text); display: flex; flex-direction: column; gap: 12px; }
     .sd-header h2 { margin: 0; font-size: 1.15rem; }
     .sd-header p, .sd-muted { color: var(--lumiverse-text-muted); margin: 4px 0 0; font-size: .86rem; }
+    .sd-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .sd-toolbar-spacer { flex: 1 1 36px; min-width: 24px; }
+    .sd-separator { display: flex; align-items: center; gap: 10px; min-height: 14px; color: var(--lumiverse-border); }
+    .sd-separator::before, .sd-separator::after { content: ''; height: 1px; flex: 1; background: var(--lumiverse-border); opacity: .7; }
+    .sd-separator::marker { content: ''; }
     .sd-controls { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr); gap: 10px; padding: 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); }
     .sd-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
     .sd-field label { font-size: .75rem; color: var(--lumiverse-text-muted); font-weight: 600; }
@@ -139,6 +144,19 @@ export function setup(ctx: SpindleFrontendContext) {
   )
   root.append(header)
 
+  const toolbar = element('nav', 'sd-toolbar')
+  toolbar.setAttribute('aria-label', 'Result actions')
+  const clearButton = element('button', 'sd-button sd-button--secondary', 'Clear results')
+  clearButton.type = 'button'
+  clearButton.disabled = true
+  clearButton.dataset.action = 'clear-results'
+  const collapseButton = element('button', 'sd-button sd-button--secondary', 'Collapse all')
+  collapseButton.type = 'button'
+  collapseButton.disabled = true
+  collapseButton.dataset.action = 'toggle-all-groups'
+  toolbar.append(clearButton, collapseButton, element('span', 'sd-toolbar-spacer'))
+  root.append(toolbar, element('div', 'sd-separator', '◆'))
+
   const permissionNotice = element('div', 'sd-notice sd-notice--warning')
   permissionNotice.hidden = true
   root.append(permissionNotice)
@@ -178,6 +196,7 @@ export function setup(ctx: SpindleFrontendContext) {
   actions.append(scanButton, status)
   controls.append(modeField, thresholdField, searchField, actions)
   root.append(controls)
+  root.append(element('div', 'sd-separator', '◆'))
 
   const summary = element('div', 'sd-summary')
   const results = element('div')
@@ -189,13 +208,14 @@ export function setup(ctx: SpindleFrontendContext) {
   let activeDeleteRequestId: string | null = null
   let charactersAvailable = true
   let selectedMode: MatchMode = 'name'
+  let similarityThreshold = 90
   let searchQuery = ''
   let scanTimeoutId: number | null = null
   let backendStatusTimeoutId: number | null = null
   const selectedKeepers = new Map<string, string>()
   const collapsedGroups = new Set<string>()
 
-  type Control<T> = { getValue: () => T; destroy: () => void }
+  type Control<T> = { getValue: () => T; setValue?: (value: T) => void; destroy: () => void }
   const components = (ctx as SpindleFrontendContext & {
     components?: Partial<SpindleFrontendContext['components']>
   }).components
@@ -231,9 +251,14 @@ export function setup(ctx: SpindleFrontendContext) {
     input.value = '90'
     input.setAttribute('aria-label', 'Similarity threshold')
     const onInput = () => { thresholdOutput.textContent = `${input.value}%` }
+    const updateValue = () => { similarityThreshold = Number(input.value) }
     input.addEventListener('input', onInput)
+    input.addEventListener('input', updateValue)
     thresholdSlot.append(input)
-    return { getValue: () => Number(input.value), destroy: () => input.removeEventListener('input', onInput) }
+    return { getValue: () => similarityThreshold, destroy: () => {
+      input.removeEventListener('input', onInput)
+      input.removeEventListener('input', updateValue)
+    } }
   }
 
   function nativeSearchControl(): Control<string> {
@@ -248,7 +273,11 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     input.addEventListener('input', onInput)
     searchSlot.append(input)
-    return { getValue: () => input.value, destroy: () => input.removeEventListener('input', onInput) }
+    return {
+      getValue: () => input.value,
+      setValue: (value) => { input.value = value },
+      destroy: () => input.removeEventListener('input', onInput),
+    }
   }
 
   let modeControl: Control<MatchMode>
@@ -275,8 +304,16 @@ export function setup(ctx: SpindleFrontendContext) {
     if (typeof components?.mountRangeSlider !== 'function') throw new Error('Unavailable')
     thresholdControl = components.mountRangeSlider(thresholdSlot, {
       min: 75, max: 100, step: 1, integer: true, value: 90,
-      onDragValue: (value) => { if (value !== null) thresholdOutput.textContent = `${value}%` },
-      onCommit: (value) => { thresholdOutput.textContent = `${value}%` },
+      onDragValue: (value) => {
+        if (value !== null) {
+          similarityThreshold = value
+          thresholdOutput.textContent = `${value}%`
+        }
+      },
+      onCommit: (value) => {
+        similarityThreshold = value
+        thresholdOutput.textContent = `${value}%`
+      },
     })
   } catch {
     thresholdControl = nativeThresholdControl()
@@ -348,7 +385,7 @@ export function setup(ctx: SpindleFrontendContext) {
         type: 'scan_duplicates',
         requestId,
         mode: selectedMode,
-        similarityThreshold: thresholdControl.getValue() / 100,
+        similarityThreshold: similarityThreshold / 100,
       })
     } catch (error) {
       currentScanRequestId = null
@@ -386,13 +423,6 @@ export function setup(ctx: SpindleFrontendContext) {
     )
     if (approximate) addBadge(summary, 'Some token counts approximate', 'warning')
     if (result.groups.length > 0) {
-      const allCollapsed = visibleGroups > 0 && result.groups
-        .filter((group) => !searchQuery.trim() || group.cards.some((card) => cardMatchesSearch(card, searchQuery.trim().toLocaleLowerCase())))
-        .every((group) => collapsedGroups.has(group.id))
-      const collapseButton = element('button', 'sd-button sd-button--secondary', allCollapsed ? 'Expand all' : 'Collapse all')
-      collapseButton.type = 'button'
-      collapseButton.dataset.action = 'toggle-all-groups'
-      summary.append(collapseButton)
       const bulkButton = element('button', 'sd-button sd-button--danger', 'Delete all non-keepers')
       bulkButton.type = 'button'
       bulkButton.disabled = activeDeleteRequestId !== null
@@ -624,7 +654,10 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function renderResults(): void {
     results.replaceChildren()
+    clearButton.disabled = currentResult === null
+    collapseButton.disabled = currentResult === null || currentResult.groups.length === 0
     if (!currentResult) {
+      collapseButton.textContent = 'Collapse all'
       summary.replaceChildren()
       results.append(element('div', 'sd-empty', 'Choose a match mode and scan your character library.'))
       return
@@ -634,6 +667,8 @@ export function setup(ctx: SpindleFrontendContext) {
     const visibleGroups = currentResult.groups.filter(
       (group) => !query || group.cards.some((card) => cardMatchesSearch(card, query)),
     )
+    const allVisibleCollapsed = visibleGroups.length > 0 && visibleGroups.every((group) => collapsedGroups.has(group.id))
+    collapseButton.textContent = allVisibleCollapsed ? 'Expand all' : 'Collapse all'
     renderSummary(currentResult, visibleGroups.length)
     if (visibleGroups.length === 0) {
       results.append(
@@ -667,6 +702,17 @@ export function setup(ctx: SpindleFrontendContext) {
         if (!groupId || !characterId) return
         selectedKeepers.set(groupId, characterId)
         renderResults()
+      return
+    }
+    if (action === 'clear-results') {
+      currentResult = null
+      selectedKeepers.clear()
+      collapsedGroups.clear()
+      searchQuery = ''
+      try { searchControl.setValue?.('') } catch { /* Native and older host controls need no reset hook. */ }
+      status.textContent = 'Results cleared. Ready to scan the full character library.'
+      staleNotice.hidden = true
+      renderResults()
       return
     }
     if (action === 'toggle-all-groups') {

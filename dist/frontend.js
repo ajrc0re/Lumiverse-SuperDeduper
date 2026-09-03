@@ -54,6 +54,11 @@ function setup(ctx) {
     .sd-root { padding: 14px; color: var(--lumiverse-text); display: flex; flex-direction: column; gap: 12px; }
     .sd-header h2 { margin: 0; font-size: 1.15rem; }
     .sd-header p, .sd-muted { color: var(--lumiverse-text-muted); margin: 4px 0 0; font-size: .86rem; }
+    .sd-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .sd-toolbar-spacer { flex: 1 1 36px; min-width: 24px; }
+    .sd-separator { display: flex; align-items: center; gap: 10px; min-height: 14px; color: var(--lumiverse-border); }
+    .sd-separator::before, .sd-separator::after { content: ''; height: 1px; flex: 1; background: var(--lumiverse-border); opacity: .7; }
+    .sd-separator::marker { content: ''; }
     .sd-controls { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr); gap: 10px; padding: 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); }
     .sd-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
     .sd-field label { font-size: .75rem; color: var(--lumiverse-text-muted); font-weight: 600; }
@@ -128,6 +133,18 @@ function setup(ctx) {
   header.append(element("h2", "", "Lumiverse SuperDeduper"));
   header.append(element("p", "", "Scan on demand, compare every payload, and choose which duplicate to keep."));
   root.append(header);
+  const toolbar = element("nav", "sd-toolbar");
+  toolbar.setAttribute("aria-label", "Result actions");
+  const clearButton = element("button", "sd-button sd-button--secondary", "Clear results");
+  clearButton.type = "button";
+  clearButton.disabled = true;
+  clearButton.dataset.action = "clear-results";
+  const collapseButton = element("button", "sd-button sd-button--secondary", "Collapse all");
+  collapseButton.type = "button";
+  collapseButton.disabled = true;
+  collapseButton.dataset.action = "toggle-all-groups";
+  toolbar.append(clearButton, collapseButton, element("span", "sd-toolbar-spacer"));
+  root.append(toolbar, element("div", "sd-separator", "◆"));
   const permissionNotice = element("div", "sd-notice sd-notice--warning");
   permissionNotice.hidden = true;
   root.append(permissionNotice);
@@ -162,6 +179,7 @@ function setup(ctx) {
   actions.append(scanButton, status);
   controls.append(modeField, thresholdField, searchField, actions);
   root.append(controls);
+  root.append(element("div", "sd-separator", "◆"));
   const summary = element("div", "sd-summary");
   const results = element("div");
   root.append(summary, results);
@@ -171,6 +189,7 @@ function setup(ctx) {
   let activeDeleteRequestId = null;
   let charactersAvailable = true;
   let selectedMode = "name";
+  let similarityThreshold = 90;
   let searchQuery = "";
   let scanTimeoutId = null;
   let backendStatusTimeoutId = null;
@@ -210,9 +229,16 @@ function setup(ctx) {
     const onInput = () => {
       thresholdOutput.textContent = `${input.value}%`;
     };
+    const updateValue = () => {
+      similarityThreshold = Number(input.value);
+    };
     input.addEventListener("input", onInput);
+    input.addEventListener("input", updateValue);
     thresholdSlot.append(input);
-    return { getValue: () => Number(input.value), destroy: () => input.removeEventListener("input", onInput) };
+    return { getValue: () => similarityThreshold, destroy: () => {
+      input.removeEventListener("input", onInput);
+      input.removeEventListener("input", updateValue);
+    } };
   }
   function nativeSearchControl() {
     searchSlot.replaceChildren();
@@ -226,7 +252,13 @@ function setup(ctx) {
     };
     input.addEventListener("input", onInput);
     searchSlot.append(input);
-    return { getValue: () => input.value, destroy: () => input.removeEventListener("input", onInput) };
+    return {
+      getValue: () => input.value,
+      setValue: (value) => {
+        input.value = value;
+      },
+      destroy: () => input.removeEventListener("input", onInput)
+    };
   }
   let modeControl;
   try {
@@ -259,10 +291,13 @@ function setup(ctx) {
       integer: true,
       value: 90,
       onDragValue: (value) => {
-        if (value !== null)
+        if (value !== null) {
+          similarityThreshold = value;
           thresholdOutput.textContent = `${value}%`;
+        }
       },
       onCommit: (value) => {
+        similarityThreshold = value;
         thresholdOutput.textContent = `${value}%`;
       }
     });
@@ -327,7 +362,7 @@ function setup(ctx) {
         type: "scan_duplicates",
         requestId,
         mode: selectedMode,
-        similarityThreshold: thresholdControl.getValue() / 100
+        similarityThreshold: similarityThreshold / 100
       });
     } catch (error) {
       currentScanRequestId = null;
@@ -358,11 +393,6 @@ function setup(ctx) {
     if (approximate)
       addBadge(summary, "Some token counts approximate", "warning");
     if (result.groups.length > 0) {
-      const allCollapsed = visibleGroups > 0 && result.groups.filter((group) => !searchQuery.trim() || group.cards.some((card) => cardMatchesSearch(card, searchQuery.trim().toLocaleLowerCase()))).every((group) => collapsedGroups.has(group.id));
-      const collapseButton = element("button", "sd-button sd-button--secondary", allCollapsed ? "Expand all" : "Collapse all");
-      collapseButton.type = "button";
-      collapseButton.dataset.action = "toggle-all-groups";
-      summary.append(collapseButton);
       const bulkButton = element("button", "sd-button sd-button--danger", "Delete all non-keepers");
       bulkButton.type = "button";
       bulkButton.disabled = activeDeleteRequestId !== null;
@@ -547,13 +577,18 @@ function setup(ctx) {
   }
   function renderResults() {
     results.replaceChildren();
+    clearButton.disabled = currentResult === null;
+    collapseButton.disabled = currentResult === null || currentResult.groups.length === 0;
     if (!currentResult) {
+      collapseButton.textContent = "Collapse all";
       summary.replaceChildren();
       results.append(element("div", "sd-empty", "Choose a match mode and scan your character library."));
       return;
     }
     const query = searchQuery.trim().toLocaleLowerCase();
     const visibleGroups = currentResult.groups.filter((group) => !query || group.cards.some((card) => cardMatchesSearch(card, query)));
+    const allVisibleCollapsed = visibleGroups.length > 0 && visibleGroups.every((group) => collapsedGroups.has(group.id));
+    collapseButton.textContent = allVisibleCollapsed ? "Expand all" : "Collapse all";
     renderSummary(currentResult, visibleGroups.length);
     if (visibleGroups.length === 0) {
       results.append(element("div", "sd-empty", currentResult.groups.length === 0 ? "No duplicate groups were found with this match mode." : "No duplicate groups match this filter."));
@@ -577,6 +612,19 @@ function setup(ctx) {
       if (!groupId || !characterId)
         return;
       selectedKeepers.set(groupId, characterId);
+      renderResults();
+      return;
+    }
+    if (action === "clear-results") {
+      currentResult = null;
+      selectedKeepers.clear();
+      collapsedGroups.clear();
+      searchQuery = "";
+      try {
+        searchControl.setValue?.("");
+      } catch {}
+      status.textContent = "Results cleared. Ready to scan the full character library.";
+      staleNotice.hidden = true;
       renderResults();
       return;
     }
