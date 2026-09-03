@@ -111,6 +111,7 @@ describe('duplicate scan orchestration', () => {
     expect(result.groups).toHaveLength(1)
     expect(result.groups[0]?.cards.map((card) => card.id).sort()).toEqual(['a1', 't1'])
     expect(progress).toContainEqual(['matching', 2, 2])
+    expect(progress.filter(([phase]) => phase === 'matching').every(([, , total]) => total === 2)).toBe(true)
   })
 
   test('uses the selected field to build the operated-card pool', async () => {

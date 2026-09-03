@@ -196,7 +196,9 @@ async function findDuplicateGroupsAsync(characters, mode, similarityThreshold, s
   const parent = new Map(characters.map((character) => [character.id, character.id]));
   const fields = characters.map(canonicalCoreFields);
   const matches = [];
-  const total = characters.length * (characters.length - 1) / 2;
+  const operatedIndexes = operatedCharacterIds ? characters.flatMap((character, index) => operatedCharacterIds.has(character.id) ? [index] : []) : characters.map((_character, index) => index);
+  const unoperatedIndexes = operatedCharacterIds ? characters.flatMap((character, index) => operatedCharacterIds.has(character.id) ? [] : [index]) : [];
+  const total = operatedIndexes.length * (operatedIndexes.length - 1) / 2 + operatedIndexes.length * unoperatedIndexes.length;
   let completed = 0;
   const find = (id) => {
     let root = id;
@@ -210,27 +212,37 @@ async function findDuplicateGroupsAsync(characters, mode, similarityThreshold, s
     }
     return root;
   };
-  for (let left = 0;left < characters.length; left += 1) {
-    for (let right = left + 1;right < characters.length; right += 1) {
-      if (operatedCharacterIds && !operatedCharacterIds.has(characters[left].id) && !operatedCharacterIds.has(characters[right].id))
-        continue;
-      if (signal?.aborted)
-        throw new Error("SCAN_CANCELLED");
-      const similarity = canonicalSimilarity(fields[left], fields[right]);
-      if (similarity >= threshold) {
-        const leftId = characters[left].id;
-        const rightId = characters[right].id;
-        matches.push({ leftId, rightId, similarity });
-        const leftRoot = find(leftId);
-        const rightRoot = find(rightId);
-        if (leftRoot !== rightRoot)
-          parent.set(rightRoot, leftRoot);
-      }
-      completed += 1;
-      if (completed % 500 === 0 || completed === total) {
-        onProgress?.(completed, total);
+  const comparePair = (left, right) => {
+    if (signal?.aborted)
+      throw new Error("SCAN_CANCELLED");
+    const similarity = canonicalSimilarity(fields[left], fields[right]);
+    if (similarity >= threshold) {
+      const leftId = characters[left].id;
+      const rightId = characters[right].id;
+      matches.push({ leftId, rightId, similarity });
+      const leftRoot = find(leftId);
+      const rightRoot = find(rightId);
+      if (leftRoot !== rightRoot)
+        parent.set(rightRoot, leftRoot);
+    }
+    completed += 1;
+    if (completed % 500 === 0 || completed === total) {
+      onProgress?.(completed, total);
+      return true;
+    }
+    return false;
+  };
+  for (let left = 0;left < operatedIndexes.length; left += 1) {
+    for (let right = left + 1;right < operatedIndexes.length; right += 1) {
+      if (comparePair(operatedIndexes[left], operatedIndexes[right])) {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
+    }
+  }
+  for (const left of operatedIndexes) {
+    for (const right of unoperatedIndexes) {
+      if (comparePair(left, right))
+        await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
   const components = new Map;
