@@ -1,0 +1,12 @@
+{
+  "version": "0.1.0",
+  "name": "Lumiverse SuperDeduper",
+  "identifier": "lumiverse_superdeduper",
+  "author": "ajrc0re",
+  "github": "https://github.com/ajrc0re/Lumiverse-SuperDeduper",
+  "homepage": "https://github.com/ajrc0re/Lumiverse-SuperDeduper",
+  "description": "Find, compare, and safely remove duplicate Lumiverse character cards.",
+  "permissions": ["characters", "world_books", "images", "regex_scripts"],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js"
+}
