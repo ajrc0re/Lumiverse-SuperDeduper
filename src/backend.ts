@@ -18,16 +18,24 @@ function grantedFeatures() {
   }
 }
 
-const scannerApi: ScannerApi = {
-  listCharacters: async (options) =>
-    (await spindle.characters.list(options)) as { data: CharacterRecord[]; total: number },
-  countText: (text) => spindle.tokens.countText(text, { modelSource: 'main' }),
-  getWorldBook: (id) => spindle.world_books.get(id),
-  listWorldBookEntries: (worldBookId, options) =>
-    spindle.world_books.entries.list(worldBookId, options),
-  listRegexScripts: (options) => spindle.regex_scripts.list(options),
-  listImages: (options) => spindle.images.list(options),
-  getImage: (id) => spindle.images.get(id, { specificity: 'sm' }),
+function scannerApiFor(userId?: string): ScannerApi {
+  return {
+    listCharacters: async (options) =>
+      (await spindle.characters.list({ ...options, ...(userId ? { userId } : {}) })) as {
+        data: CharacterRecord[]
+        total: number
+      },
+    countText: (text) =>
+      spindle.tokens.countText(text, { modelSource: 'main', ...(userId ? { userId } : {}) }),
+    getWorldBook: (id) => spindle.world_books.get(id, userId),
+    listWorldBookEntries: (worldBookId, options) =>
+      spindle.world_books.entries.list(worldBookId, { ...options, ...(userId ? { userId } : {}) }),
+    listRegexScripts: (options) =>
+      spindle.regex_scripts.list({ ...options, ...(userId ? { userId } : {}) }),
+    listImages: (options) => spindle.images.list({ ...options, ...(userId ? { userId } : {}) }),
+    getImage: (id) =>
+      spindle.images.get(id, { specificity: 'sm', ...(userId ? { userId } : {}) }),
+  }
 }
 
 function send(payload: BackendResponse, userId?: string): void {
@@ -72,7 +80,7 @@ async function handleScan(
   send({ type: 'scan_started', requestId: request.requestId }, userId)
   try {
     const result = await scanDuplicates(
-      scannerApi,
+      scannerApiFor(userId),
       grantedFeatures(),
       request.mode,
       request.similarityThreshold,
@@ -123,8 +131,8 @@ async function handleDelete(
 
     const result = await deleteCharacterSafely(
       {
-        getCharacter: async (id) => (await spindle.characters.get(id)) as CharacterRecord | null,
-        deleteCharacter: (id) => spindle.characters.delete(id),
+        getCharacter: async (id) => (await spindle.characters.get(id, userId)) as CharacterRecord | null,
+        deleteCharacter: (id) => spindle.characters.delete(id, userId),
         confirm: async (character) => {
           const confirmation = await spindle.modal.confirm({
             title: 'Delete duplicate character?',
@@ -174,17 +182,17 @@ const staleEvents = [
 ] as const
 
 for (const event of staleEvents) {
-  spindle.on(event, () => {
-    send({ type: 'results_stale', reason: 'Character data changed after the last scan.' })
+  spindle.on(event, (_payload, userId) => {
+    send({ type: 'results_stale', reason: 'Character data changed after the last scan.' }, userId)
   })
 }
 
 if (spindle.permissions.has('regex_scripts')) {
-  spindle.on('REGEX_SCRIPT_CHANGED', () => {
-    send({ type: 'results_stale', reason: 'Character script data changed after the last scan.' })
+  spindle.on('REGEX_SCRIPT_CHANGED', (_payload, userId) => {
+    send({ type: 'results_stale', reason: 'Character script data changed after the last scan.' }, userId)
   })
-  spindle.on('REGEX_SCRIPT_DELETED', () => {
-    send({ type: 'results_stale', reason: 'Character script data changed after the last scan.' })
+  spindle.on('REGEX_SCRIPT_DELETED', (_payload, userId) => {
+    send({ type: 'results_stale', reason: 'Character script data changed after the last scan.' }, userId)
   })
 }
 
