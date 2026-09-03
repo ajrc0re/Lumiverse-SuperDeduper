@@ -95,6 +95,47 @@ describe('duplicate scan orchestration', () => {
     expect(progress).toContainEqual(['enriching', 2, 2])
   })
 
+  test('compares filtered cards against every candidate in the library', async () => {
+    const cards = [
+      character('a1', { name: 'Alice' }),
+      character('t1', { name: 'Tom' }),
+      character('j1', { name: 'Jerry', description: 'Unrelated content' }),
+    ]
+    const { api } = createApi(cards)
+    const progress: Array<[string, number, number]> = []
+    const result = await scanDuplicates(api, {
+      characters: true, worldBooks: false, images: false, regexScripts: false,
+    }, 'similar', 0.9, undefined, (phase, current, total) => progress.push([phase, current, total]), 'a*')
+
+    expect(result.totalCharacters).toBe(1)
+    expect(result.groups).toHaveLength(1)
+    expect(result.groups[0]?.cards.map((card) => card.id).sort()).toEqual(['a1', 't1'])
+    expect(progress).toContainEqual(['matching', 2, 2])
+  })
+
+  test('similarity matching yields progress while comparing many pairs', async () => {
+    const cards = Array.from({ length: 33 }, (_, index) => character(String(index)))
+    const { api } = createApi(cards)
+    const progress: Array<[string, number, number]> = []
+    await scanDuplicates(api, {
+      characters: true, worldBooks: false, images: false, regexScripts: false,
+    }, 'similar', 0.9, undefined, (phase, current, total) => progress.push([phase, current, total]))
+
+    expect(progress).toContainEqual(['matching', 500, 528])
+    expect(progress).toContainEqual(['matching', 528, 528])
+  })
+
+  test('can cancel during a long similarity comparison', async () => {
+    const cards = Array.from({ length: 34 }, (_, index) => character(String(index)))
+    const { api } = createApi(cards)
+    const controller = new AbortController()
+    await expect(scanDuplicates(api, {
+      characters: true, worldBooks: false, images: false, regexScripts: false,
+    }, 'similar', 0.9, controller.signal, (phase, current) => {
+      if (phase === 'matching' && current === 500) controller.abort()
+    })).rejects.toThrow('SCAN_CANCELLED')
+  })
+
   test('stops before further work when its cancellation signal is aborted', async () => {
     const { api, calls } = createApi([character('a'), character('b')])
     const controller = new AbortController()

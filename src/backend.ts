@@ -60,7 +60,8 @@ function isFrontendRequest(payload: unknown): payload is FrontendRequest {
     const request = payload as Partial<Extract<FrontendRequest, { type: 'scan_duplicates' }>>
     return (
       typeof request.requestId === 'string' &&
-      isMatchMode(request.mode)
+      isMatchMode(request.mode) &&
+      (request.filterQuery === undefined || typeof request.filterQuery === 'string')
     )
   }
   if (type === 'cancel_scan') {
@@ -122,6 +123,7 @@ async function handleScan(
           send({ type: 'scan_progress', requestId: request.requestId, phase, current, total }, userId)
         }
       },
+      request.filterQuery ?? '',
     )
     if (controller.signal.aborted) return
     send({ type: 'scan_result', requestId: request.requestId, result }, userId)

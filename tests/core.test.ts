@@ -16,6 +16,8 @@ import type { CardComparison, CharacterRecord, PayloadSummary } from '../src/typ
 test('result filtering supports asterisks as wildcards', () => {
   expect(matchesWildcardSearch(['John', 'Joseph'], 'jo*')).toBe(true)
   expect(matchesWildcardSearch(['Alice'], 'jo*')).toBe(false)
+  expect(matchesWildcardSearch(['Alice'], 'a*')).toBe(true)
+  expect(matchesWildcardSearch(['Banana'], 'a*')).toBe(false)
   expect(matchesWildcardSearch(['Creator Name'], 'ator')).toBe(true)
   expect(matchesWildcardSearch(['literal.value'], 'literal.*')).toBe(true)
 })

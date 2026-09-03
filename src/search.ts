@@ -15,6 +15,6 @@ export function matchesWildcardSearch(values: string[], query: string): boolean 
     .split('*')
     .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .join('.*')
-  const matcher = new RegExp(pattern, 'u')
+  const matcher = new RegExp(`^${pattern}$`, 'u')
   return normalizedValues.some((value) => matcher.test(value))
 }

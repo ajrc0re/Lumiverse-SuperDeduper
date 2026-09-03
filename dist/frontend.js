@@ -12,7 +12,7 @@ function matchesWildcardSearch(values, query) {
     return normalizedValues.some((value) => value.includes(normalizedQuery));
   }
   const pattern = normalizedQuery.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
-  const matcher = new RegExp(pattern, "u");
+  const matcher = new RegExp(`^${pattern}$`, "u");
   return normalizedValues.some((value) => matcher.test(value));
 }
 
@@ -415,7 +415,8 @@ function setup(ctx) {
         type: "scan_duplicates",
         requestId,
         mode: selectedMode,
-        similarityThreshold: similarityThreshold / 100
+        similarityThreshold: similarityThreshold / 100,
+        filterQuery: searchControl.getValue()
       });
     } catch (error) {
       currentScanRequestId = null;

@@ -2,7 +2,7 @@ import {
   canonicalCoreFields,
   classifyExtensionPayload,
   compareKeeperCandidates,
-  findDuplicateGroups,
+  findDuplicateGroupsAsync,
   recommendationReasons,
 } from './core'
 import type {
@@ -16,6 +16,7 @@ import type {
   ScanResult,
   TokenCount,
 } from './types'
+import { matchesWildcardSearch } from './search'
 
 interface Page<T> {
   data: T[]
@@ -476,15 +477,31 @@ export async function scanDuplicates(
   similarityThreshold: number,
   signal?: AbortSignal,
   onProgress?: ScanProgressCallback,
+  filterQuery = '',
 ): Promise<ScanResult> {
   if (!features.characters) throw new Error('PERMISSION_DENIED: characters')
 
   onProgress?.('collecting', 0, 0)
-  const characters = await listAllCharacters(api, signal, onProgress)
+  const allCharacters = await listAllCharacters(api, signal, onProgress)
   checkCancelled(signal)
-  onProgress?.('matching', 0, characters.length)
-  const rawGroups = findDuplicateGroups(characters, mode, similarityThreshold)
-  onProgress?.('matching', characters.length, characters.length)
+  const operatedCharacters = allCharacters.filter((character) => matchesWildcardSearch(
+    [character.name, character.creator, character.id, ...character.tags],
+    filterQuery,
+  ))
+  const operatedCharacterIds = new Set(operatedCharacters.map((character) => character.id))
+  const characters = allCharacters
+  const unfilteredCharacters = characters.length - operatedCharacters.length
+  const matchingTotal = mode === 'similar'
+    ? (operatedCharacters.length * (operatedCharacters.length - 1)) / 2 +
+      operatedCharacters.length * unfilteredCharacters
+    : operatedCharacters.length
+  onProgress?.('matching', 0, matchingTotal)
+  const rawGroups = await findDuplicateGroupsAsync(
+    characters, mode, similarityThreshold, signal,
+    (current, total) => onProgress?.('matching', current, total),
+    operatedCharacterIds,
+  )
+  onProgress?.('matching', matchingTotal, matchingTotal)
   const duplicateIds = new Set(rawGroups.flatMap((group) => group.characterIds))
   const candidates = characters.filter((character) => duplicateIds.has(character.id))
   const availabilityState = permissionAvailability(features)
@@ -525,7 +542,7 @@ export async function scanDuplicates(
 
   return {
     groups,
-    totalCharacters: characters.length,
+    totalCharacters: operatedCharacters.length,
     duplicateCharacters: duplicateIds.size,
     availability: availabilityState,
     scannedAt: Math.floor(Date.now() / 1_000),

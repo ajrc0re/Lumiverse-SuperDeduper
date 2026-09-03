@@ -96,6 +96,22 @@ export function characterSimilarity(
   return totalWeight === 0 ? 0 : weightedScore / totalWeight
 }
 
+type CanonicalFields = ReturnType<typeof canonicalCoreFields>
+
+function canonicalSimilarity(leftFields: CanonicalFields, rightFields: CanonicalFields): number {
+  let weightedScore = 0
+  let totalWeight = 0
+  for (const key of CORE_FIELD_KEYS) {
+    const leftValue = leftFields[key]
+    const rightValue = rightFields[key]
+    if (!leftValue && !rightValue) continue
+    const weight = Math.max(leftValue.length, rightValue.length, 1)
+    weightedScore += sorensenDice(leftValue, rightValue) * weight
+    totalWeight += weight
+  }
+  return totalWeight === 0 ? 0 : weightedScore / totalWeight
+}
+
 function pairAll(ids: string[]): MatchPair[] {
   const pairs: MatchPair[] = []
   for (let left = 0; left < ids.length; left += 1) {
@@ -195,6 +211,81 @@ export function findDuplicateGroups(
         ),
       }
     })
+}
+
+export async function findDuplicateGroupsAsync(
+  characters: CharacterRecord[],
+  mode: MatchMode,
+  similarityThreshold: number,
+  signal?: AbortSignal,
+  onProgress?: (current: number, total: number) => void,
+  operatedCharacterIds?: ReadonlySet<string>,
+): Promise<RawDuplicateGroup[]> {
+  if (mode !== 'similar') {
+    const groups = findDuplicateGroups(characters, mode, similarityThreshold)
+    return operatedCharacterIds
+      ? groups.filter((group) => group.characterIds.some((id) => operatedCharacterIds.has(id)))
+      : groups
+  }
+
+  const threshold = Math.min(1, Math.max(0, similarityThreshold))
+  const parent = new Map(characters.map((character) => [character.id, character.id]))
+  const fields = characters.map(canonicalCoreFields)
+  const matches: MatchPair[] = []
+  const total = (characters.length * (characters.length - 1)) / 2
+  let completed = 0
+
+  const find = (id: string): string => {
+    let root = id
+    while ((parent.get(root) ?? root) !== root) root = parent.get(root)!
+    let current = id
+    while ((parent.get(current) ?? current) !== root) {
+      const next = parent.get(current)!
+      parent.set(current, root)
+      current = next
+    }
+    return root
+  }
+
+  for (let left = 0; left < characters.length; left += 1) {
+    for (let right = left + 1; right < characters.length; right += 1) {
+      if (operatedCharacterIds &&
+        !operatedCharacterIds.has(characters[left]!.id) &&
+        !operatedCharacterIds.has(characters[right]!.id)
+      ) continue
+      if (signal?.aborted) throw new Error('SCAN_CANCELLED')
+      const similarity = canonicalSimilarity(fields[left]!, fields[right]!)
+      if (similarity >= threshold) {
+        const leftId = characters[left]!.id
+        const rightId = characters[right]!.id
+        matches.push({ leftId, rightId, similarity })
+        const leftRoot = find(leftId)
+        const rightRoot = find(rightId)
+        if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot)
+      }
+      completed += 1
+      if (completed % 500 === 0 || completed === total) {
+        onProgress?.(completed, total)
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      }
+    }
+  }
+
+  const components = new Map<string, string[]>()
+  for (const character of characters) {
+    const root = find(character.id)
+    const ids = components.get(root) ?? []
+    ids.push(character.id)
+    components.set(root, ids)
+  }
+  return [...components.values()].filter((ids) => ids.length > 1).map((ids) => {
+    const sortedIds = ids.sort()
+    const idSet = new Set(sortedIds)
+    return {
+      id: groupId(mode, sortedIds), mode, characterIds: sortedIds,
+      matches: matches.filter((match) => idSet.has(match.leftId) && idSet.has(match.rightId)),
+    }
+  })
 }
 
 function payloadCategory(key: string): ExtensionPayloadCategory {

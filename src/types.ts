@@ -153,6 +153,7 @@ export type FrontendRequest =
       requestId: string
       mode: MatchMode
       similarityThreshold: number
+      filterQuery?: string
     }
   | { type: 'cancel_scan'; requestId: string }
   | {

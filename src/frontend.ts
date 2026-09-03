@@ -424,6 +424,7 @@ export function setup(ctx: SpindleFrontendContext) {
         requestId,
         mode: selectedMode,
         similarityThreshold: similarityThreshold / 100,
+        filterQuery: searchControl.getValue(),
       })
     } catch (error) {
       currentScanRequestId = null
