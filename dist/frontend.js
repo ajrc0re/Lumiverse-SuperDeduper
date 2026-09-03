@@ -41,6 +41,15 @@ function maxSimilarity(group, cardId) {
   const values = group.matches.filter((match) => match.leftId === cardId || match.rightId === cardId).map((match) => match.similarity);
   return values.length > 0 ? Math.max(...values) : 1;
 }
+function createRequestId() {
+  if (typeof globalThis.crypto?.randomUUID === "function")
+    return globalThis.crypto.randomUUID();
+  if (typeof globalThis.crypto?.getRandomValues === "function") {
+    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 function setup(ctx) {
   let deferredReady = false;
   try {
@@ -174,7 +183,7 @@ function setup(ctx) {
   searchField.append(searchLabel, searchSlot);
   const actions = element("div", "sd-actions");
   const scanButton = element("button", "sd-button", "Scan characters");
-  scanButton.type = "submit";
+  scanButton.type = "button";
   const status = element("span", "sd-muted", "Scans your entire character library. Connecting to extension backend…");
   actions.append(scanButton, status);
   controls.append(modeField, thresholdField, searchField, actions);
@@ -350,9 +359,15 @@ function setup(ctx) {
     }
   }
   function startScan() {
-    if (!charactersAvailable || currentScanRequestId)
+    if (!charactersAvailable) {
+      status.textContent = "Cannot scan until the Characters permission is granted.";
       return;
-    const requestId = crypto.randomUUID();
+    }
+    if (currentScanRequestId) {
+      status.textContent = "A scan is already in progress.";
+      return;
+    }
+    const requestId = createRequestId();
     currentScanRequestId = requestId;
     scanButton.disabled = true;
     status.textContent = "Scan request sent…";
@@ -657,7 +672,7 @@ function setup(ctx) {
       const uniqueCards = [...new Map(cards.map((card) => [card.characterId, card])).values()];
       if (uniqueCards.length === 0)
         return;
-      const requestId = crypto.randomUUID();
+      const requestId = createRequestId();
       activeDeleteRequestId = requestId;
       status.textContent = `Waiting for confirmation to delete ${uniqueCards.length} non-keeper duplicates…`;
       renderResults();
@@ -679,7 +694,7 @@ function setup(ctx) {
       const card = currentResult.groups.find((group) => group.id === groupId)?.cards.find((candidate) => candidate.id === characterId);
       if (!card)
         return;
-      const requestId = crypto.randomUUID();
+      const requestId = createRequestId();
       activeDeleteRequestId = requestId;
       status.textContent = `Waiting for deletion confirmation for ${card.name}…`;
       renderResults();
@@ -691,11 +706,18 @@ function setup(ctx) {
       });
     }
   }
-  const onSubmit = (event) => {
+  const onScanClick = (event) => {
     event.preventDefault();
     startScan();
   };
-  controls.addEventListener("submit", onSubmit);
+  const onScanKeyDown = (event) => {
+    if (event.key !== "Enter")
+      return;
+    event.preventDefault();
+    startScan();
+  };
+  scanButton.addEventListener("click", onScanClick);
+  controls.addEventListener("keydown", onScanKeyDown);
   const onActionClick = (event) => {
     const target = event.target instanceof Element ? event.target.closest("[data-action]") : null;
     if (!target || !root.contains(target) || target instanceof HTMLButtonElement && target.disabled)
@@ -708,7 +730,8 @@ function setup(ctx) {
   };
   root.addEventListener("click", onActionClick);
   const unbindActions = () => {
-    controls.removeEventListener("submit", onSubmit);
+    scanButton.removeEventListener("click", onScanClick);
+    controls.removeEventListener("keydown", onScanKeyDown);
     root.removeEventListener("click", onActionClick);
   };
   const unsubscribe = ctx.onBackendMessage((payload) => {

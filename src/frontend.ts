@@ -40,6 +40,15 @@ function maxSimilarity(group: DuplicateGroup, cardId: string): number {
   return values.length > 0 ? Math.max(...values) : 1
 }
 
+function createRequestId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
 export function setup(ctx: SpindleFrontendContext) {
   let deferredReady = false
   try {
@@ -191,7 +200,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   const actions = element('div', 'sd-actions')
   const scanButton = element('button', 'sd-button', 'Scan characters')
-  scanButton.type = 'submit'
+  scanButton.type = 'button'
   const status = element('span', 'sd-muted', 'Scans your entire character library. Connecting to extension backend…')
   actions.append(scanButton, status)
   controls.append(modeField, thresholdField, searchField, actions)
@@ -374,8 +383,15 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function startScan(): void {
-    if (!charactersAvailable || currentScanRequestId) return
-    const requestId = crypto.randomUUID()
+    if (!charactersAvailable) {
+      status.textContent = 'Cannot scan until the Characters permission is granted.'
+      return
+    }
+    if (currentScanRequestId) {
+      status.textContent = 'A scan is already in progress.'
+      return
+    }
+    const requestId = createRequestId()
     currentScanRequestId = requestId
     scanButton.disabled = true
     status.textContent = 'Scan request sent…'
@@ -743,7 +759,7 @@ export function setup(ctx: SpindleFrontendContext) {
       })
       const uniqueCards = [...new Map(cards.map((card) => [card.characterId, card])).values()]
       if (uniqueCards.length === 0) return
-      const requestId = crypto.randomUUID()
+      const requestId = createRequestId()
       activeDeleteRequestId = requestId
       status.textContent = `Waiting for confirmation to delete ${uniqueCards.length} non-keeper duplicates…`
       renderResults()
@@ -765,7 +781,7 @@ export function setup(ctx: SpindleFrontendContext) {
           ?.cards.find((candidate) => candidate.id === characterId)
         if (!card) return
 
-        const requestId = crypto.randomUUID()
+        const requestId = createRequestId()
         activeDeleteRequestId = requestId
         status.textContent = `Waiting for deletion confirmation for ${card.name}…`
         renderResults()
@@ -778,11 +794,17 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
-  const onSubmit = (event: SubmitEvent) => {
+  const onScanClick = (event: MouseEvent) => {
     event.preventDefault()
     startScan()
   }
-  controls.addEventListener('submit', onSubmit)
+  const onScanKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    startScan()
+  }
+  scanButton.addEventListener('click', onScanClick)
+  controls.addEventListener('keydown', onScanKeyDown)
 
   const onActionClick = (event: Event) => {
     const target = event.target instanceof Element
@@ -795,7 +817,8 @@ export function setup(ctx: SpindleFrontendContext) {
   }
   root.addEventListener('click', onActionClick)
   const unbindActions = () => {
-    controls.removeEventListener('submit', onSubmit)
+    scanButton.removeEventListener('click', onScanClick)
+    controls.removeEventListener('keydown', onScanKeyDown)
     root.removeEventListener('click', onActionClick)
   }
 
