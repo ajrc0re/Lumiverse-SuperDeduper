@@ -41,7 +41,16 @@ function maxSimilarity(group: DuplicateGroup, cardId: string): number {
 }
 
 export function setup(ctx: SpindleFrontendContext) {
-  ctx.deferReady()
+  let deferredReady = false
+  try {
+    const deferReady = (ctx as SpindleFrontendContext & { deferReady?: () => void }).deferReady
+    if (typeof deferReady === 'function') {
+      deferReady.call(ctx)
+      deferredReady = true
+    }
+  } catch {
+    // Older hosts do not expose manual readiness. Registration can continue normally.
+  }
 
   const removeStyle = ctx.dom.addStyle(`
     .sd-root { padding: 14px; color: var(--lumiverse-text); display: flex; flex-direction: column; gap: 12px; }
@@ -51,6 +60,10 @@ export function setup(ctx: SpindleFrontendContext) {
     .sd-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
     .sd-field label { font-size: .75rem; color: var(--lumiverse-text-muted); font-weight: 600; }
     .sd-component-slot { min-width: 0; flex: 1; }
+    .sd-native-control { box-sizing: border-box; width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill); color: var(--lumiverse-text); pointer-events: auto !important; position: relative; z-index: 1; }
+    select.sd-native-control, button.sd-button { cursor: pointer; pointer-events: auto !important; position: relative; z-index: 1; }
+    input.sd-native-control { cursor: text; }
+    input[type='range'].sd-native-control { cursor: pointer; padding: 0; }
     .sd-hidden { display: none !important; }
     .sd-field--wide { grid-column: 1 / -1; }
     .sd-threshold-line { display: flex; align-items: center; gap: 8px; }
@@ -180,39 +193,108 @@ export function setup(ctx: SpindleFrontendContext) {
   let backendStatusTimeoutId: number | null = null
   const selectedKeepers = new Map<string, string>()
 
-  const modeControl = ctx.components.mountSelect(modeSlot, {
-    value: selectedMode,
-    options: modeOptions,
-    ariaLabel: 'Duplicate match mode',
-    portal: true,
-    onChange: (value) => {
+  type Control<T> = { getValue: () => T; destroy: () => void }
+  const components = (ctx as SpindleFrontendContext & {
+    components?: Partial<SpindleFrontendContext['components']>
+  }).components
+
+  function nativeModeControl(): Control<MatchMode> {
+    modeSlot.replaceChildren()
+    const select = element('select', 'sd-native-control')
+    select.setAttribute('aria-label', 'Duplicate match mode')
+    for (const optionData of modeOptions) {
+      const option = element('option', '', optionData.label)
+      option.value = optionData.value
+      select.append(option)
+    }
+    select.value = selectedMode
+    const onChange = () => {
+      const value = select.value
       if (value !== 'name' && value !== 'exact' && value !== 'similar') return
       selectedMode = value
       thresholdField.classList.toggle('sd-hidden', value !== 'similar')
-    },
-  })
-  const thresholdControl = ctx.components.mountRangeSlider(thresholdSlot, {
-    min: 75,
-    max: 100,
-    step: 1,
-    integer: true,
-    value: 90,
-    onDragValue: (value) => {
-      if (value !== null) thresholdOutput.textContent = `${value}%`
-    },
-    onCommit: (value) => {
-      thresholdOutput.textContent = `${value}%`
-    },
-  })
-  const searchControl = ctx.components.mountTextInput(searchSlot, {
-    value: '',
-    placeholder: 'Name, creator, tag, or character ID',
-    ariaLabel: 'Filter duplicate results',
-    onChange: (value) => {
-      searchQuery = value
+    }
+    select.addEventListener('change', onChange)
+    modeSlot.append(select)
+    return { getValue: () => selectedMode, destroy: () => select.removeEventListener('change', onChange) }
+  }
+
+  function nativeThresholdControl(): Control<number> {
+    thresholdSlot.replaceChildren()
+    const input = element('input', 'sd-native-control')
+    input.type = 'range'
+    input.min = '75'
+    input.max = '100'
+    input.step = '1'
+    input.value = '90'
+    input.setAttribute('aria-label', 'Similarity threshold')
+    const onInput = () => { thresholdOutput.textContent = `${input.value}%` }
+    input.addEventListener('input', onInput)
+    thresholdSlot.append(input)
+    return { getValue: () => Number(input.value), destroy: () => input.removeEventListener('input', onInput) }
+  }
+
+  function nativeSearchControl(): Control<string> {
+    searchSlot.replaceChildren()
+    const input = element('input', 'sd-native-control')
+    input.type = 'search'
+    input.placeholder = 'Name, creator, tag, or character ID'
+    input.setAttribute('aria-label', 'Filter duplicate results')
+    const onInput = () => {
+      searchQuery = input.value
       renderResults()
-    },
-  })
+    }
+    input.addEventListener('input', onInput)
+    searchSlot.append(input)
+    return { getValue: () => input.value, destroy: () => input.removeEventListener('input', onInput) }
+  }
+
+  let modeControl: Control<MatchMode>
+  try {
+    if (typeof components?.mountSelect !== 'function') throw new Error('Unavailable')
+    const mounted = components.mountSelect(modeSlot, {
+      value: selectedMode,
+      options: modeOptions,
+      ariaLabel: 'Duplicate match mode',
+      portal: true,
+      onChange: (value) => {
+        if (value !== 'name' && value !== 'exact' && value !== 'similar') return
+        selectedMode = value
+        thresholdField.classList.toggle('sd-hidden', value !== 'similar')
+      },
+    })
+    modeControl = { getValue: () => selectedMode, destroy: () => mounted.destroy() }
+  } catch {
+    modeControl = nativeModeControl()
+  }
+
+  let thresholdControl: Control<number>
+  try {
+    if (typeof components?.mountRangeSlider !== 'function') throw new Error('Unavailable')
+    thresholdControl = components.mountRangeSlider(thresholdSlot, {
+      min: 75, max: 100, step: 1, integer: true, value: 90,
+      onDragValue: (value) => { if (value !== null) thresholdOutput.textContent = `${value}%` },
+      onCommit: (value) => { thresholdOutput.textContent = `${value}%` },
+    })
+  } catch {
+    thresholdControl = nativeThresholdControl()
+  }
+
+  let searchControl: Control<string>
+  try {
+    if (typeof components?.mountTextInput !== 'function') throw new Error('Unavailable')
+    searchControl = components.mountTextInput(searchSlot, {
+      value: '',
+      placeholder: 'Name, creator, tag, or character ID',
+      ariaLabel: 'Filter duplicate results',
+      onChange: (value) => {
+        searchQuery = value
+        renderResults()
+      },
+    })
+  } catch {
+    searchControl = nativeSearchControl()
+  }
 
   function setPermissionState(availability: PermissionAvailability): void {
     charactersAvailable = availability.characters !== 'unavailable'
@@ -532,19 +614,24 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
-  const unbindActions = ctx.ui.events.bindActionHandlers(
-    root,
-    {
-      'scan-characters': () => startScan(),
-      'open-settings': () => ctx.events.emit('open-settings', { view: 'extensions' }),
-      'protect-card': ({ element: actionElement }) => {
+  function handleAction(action: string, actionElement: HTMLElement): void {
+    if (action === 'scan-characters') {
+      startScan()
+      return
+    }
+    if (action === 'open-settings') {
+      ctx.events.emit('open-settings', { view: 'extensions' })
+      return
+    }
+    if (action === 'protect-card') {
         const groupId = actionElement.dataset.groupId
         const characterId = actionElement.dataset.characterId
         if (!groupId || !characterId) return
         selectedKeepers.set(groupId, characterId)
         renderResults()
-      },
-      'delete-card': ({ element: actionElement }) => {
+      return
+    }
+    if (action === 'delete-card') {
         const groupId = actionElement.dataset.groupId
         const characterId = actionElement.dataset.characterId
         if (!groupId || !characterId || !currentResult || activeDeleteRequestId) return
@@ -564,10 +651,38 @@ export function setup(ctx: SpindleFrontendContext) {
           characterId: card.id,
           expectedUpdatedAt: card.updatedAt,
         })
+    }
+  }
+
+  let unbindActions: () => void
+  try {
+    const bindActionHandlers = (ctx.ui as typeof ctx.ui & {
+      events?: Partial<typeof ctx.ui.events>
+    }).events?.bindActionHandlers
+    if (typeof bindActionHandlers !== 'function') throw new Error('Unavailable')
+    unbindActions = bindActionHandlers.call(
+      ctx.ui.events,
+      root,
+      {
+        'scan-characters': ({ element: actionElement }) => handleAction('scan-characters', actionElement),
+        'open-settings': ({ element: actionElement }) => handleAction('open-settings', actionElement),
+        'protect-card': ({ element: actionElement }) => handleAction('protect-card', actionElement),
+        'delete-card': ({ element: actionElement }) => handleAction('delete-card', actionElement),
       },
-    },
-    { attribute: 'data-action', events: ['click'] },
-  )
+      { attribute: 'data-action', events: ['click'] },
+    )
+  } catch {
+    const onClick = (event: Event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLElement>('[data-action]')
+        : null
+      if (!target || !root.contains(target) || target instanceof HTMLButtonElement && target.disabled) return
+      const action = target.dataset.action
+      if (action) handleAction(action, target)
+    }
+    root.addEventListener('click', onClick)
+    unbindActions = () => root.removeEventListener('click', onClick)
+  }
 
   const unsubscribe = ctx.onBackendMessage((payload: unknown) => {
     if (!payload || typeof payload !== 'object' || !('type' in payload)) return
@@ -634,14 +749,29 @@ export function setup(ctx: SpindleFrontendContext) {
   })
 
   renderResults()
-  ctx.ready()
+  if (deferredReady) {
+    try {
+      const ready = (ctx as SpindleFrontendContext & { ready?: () => void }).ready
+      if (typeof ready === 'function') ready.call(ctx)
+    } catch {
+      // The drawer has already been registered; readiness failures must not remove it.
+    }
+  }
   backendStatusTimeoutId = window.setTimeout(() => {
     status.textContent = 'Backend not responding. Reload or re-enable the extension.'
   }, 5_000)
   ctx.sendToBackend({ type: 'get_status' })
-  const unsubscribeActivation = tab.onActivate(() => {
-    ctx.sendToBackend({ type: 'get_status' })
-  })
+  let unsubscribeActivation = () => {}
+  try {
+    const onActivate = (tab as typeof tab & { onActivate?: (callback: () => void) => () => void }).onActivate
+    if (typeof onActivate === 'function') {
+      unsubscribeActivation = onActivate.call(tab, () => {
+        ctx.sendToBackend({ type: 'get_status' })
+      })
+    }
+  } catch {
+    // Activation refresh is an enhancement; initial status discovery still runs above.
+  }
 
   return () => {
     if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
