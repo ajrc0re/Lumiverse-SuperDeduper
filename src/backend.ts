@@ -9,6 +9,12 @@ import type {
 
 declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 
+const activeScans = new Map<string, { requestId: string; controller: AbortController }>()
+
+function scanOwnerKey(userId?: string): string {
+  return userId ?? '__extension_owner__'
+}
+
 function grantedFeatures() {
   return {
     characters: spindle.permissions.has('characters'),
@@ -57,6 +63,10 @@ function isFrontendRequest(payload: unknown): payload is FrontendRequest {
       isMatchMode(request.mode)
     )
   }
+  if (type === 'cancel_scan') {
+    const request = payload as Partial<Extract<FrontendRequest, { type: 'cancel_scan' }>>
+    return typeof request.requestId === 'string'
+  }
   if (type === 'delete_card') {
     const request = payload as Partial<Extract<FrontendRequest, { type: 'delete_card' }>>
     return (
@@ -89,6 +99,13 @@ async function handleScan(
   request: Extract<FrontendRequest, { type: 'scan_duplicates' }>,
   userId?: string,
 ): Promise<void> {
+  const ownerKey = scanOwnerKey(userId)
+  if (activeScans.has(ownerKey)) {
+    send({ type: 'scan_error', requestId: request.requestId, error: 'A scan is already running for this user.', permissionDenied: false }, userId)
+    return
+  }
+  const controller = new AbortController()
+  activeScans.set(ownerKey, { requestId: request.requestId, controller })
   send({ type: 'scan_started', requestId: request.requestId }, userId)
   try {
     const threshold = Number.isFinite(request.similarityThreshold)
@@ -99,9 +116,17 @@ async function handleScan(
       grantedFeatures(),
       request.mode,
       threshold,
+      controller.signal,
+      (phase, current, total) => {
+        if (!controller.signal.aborted) {
+          send({ type: 'scan_progress', requestId: request.requestId, phase, current, total }, userId)
+        }
+      },
     )
+    if (controller.signal.aborted) return
     send({ type: 'scan_result', requestId: request.requestId, result }, userId)
   } catch (error) {
+    if (controller.signal.aborted || errorMessage(error) === 'SCAN_CANCELLED') return
     const message = errorMessage(error)
     send(
       {
@@ -112,6 +137,45 @@ async function handleScan(
       },
       userId,
     )
+  } finally {
+    const active = activeScans.get(ownerKey)
+    if (active?.requestId === request.requestId) activeScans.delete(ownerKey)
+  }
+}
+
+async function handleCancelScan(
+  request: Extract<FrontendRequest, { type: 'cancel_scan' }>,
+  userId?: string,
+): Promise<void> {
+  const ownerKey = scanOwnerKey(userId)
+  const active = activeScans.get(ownerKey)
+  if (!active || active.requestId !== request.requestId) {
+    send({ type: 'scan_cancel_result', requestId: request.requestId, cancelled: false, error: 'The scan is no longer running.' }, userId)
+    return
+  }
+  try {
+    const confirmation = await spindle.modal.confirm({
+      title: 'Stop duplicate scan?',
+      message: 'Stop the current scan and discard any results it has produced?',
+      variant: 'danger',
+      confirmLabel: 'Stop search',
+      cancelLabel: 'Continue scanning',
+      ...(userId ? { userId } : {}),
+    })
+    if (!confirmation.confirmed) {
+      send({ type: 'scan_cancel_result', requestId: request.requestId, cancelled: false }, userId)
+      return
+    }
+    const current = activeScans.get(ownerKey)
+    if (!current || current.requestId !== request.requestId) {
+      send({ type: 'scan_cancel_result', requestId: request.requestId, cancelled: false, error: 'The scan finished before it could be stopped.' }, userId)
+      return
+    }
+    current.controller.abort()
+    activeScans.delete(ownerKey)
+    send({ type: 'scan_cancel_result', requestId: request.requestId, cancelled: true }, userId)
+  } catch (error) {
+    send({ type: 'scan_cancel_result', requestId: request.requestId, cancelled: false, error: errorMessage(error) }, userId)
   }
 }
 
@@ -220,6 +284,8 @@ spindle.onFrontendMessage((payload: unknown, userId?: string) => {
     send({ type: 'status_result', availability: permissionAvailability(grantedFeatures()) }, userId)
   } else if (payload.type === 'scan_duplicates') {
     void handleScan(payload, userId)
+  } else if (payload.type === 'cancel_scan') {
+    void handleCancelScan(payload, userId)
   } else if (payload.type === 'delete_card') {
     void handleDelete(payload, userId)
   } else {

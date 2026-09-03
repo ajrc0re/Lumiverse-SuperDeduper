@@ -22,6 +22,12 @@ interface Page<T> {
   total: number
 }
 
+export type ScanProgressCallback = (
+  phase: 'collecting' | 'matching' | 'enriching',
+  current: number,
+  total: number,
+) => void
+
 interface WorldBookRecord {
   id: string
   name: string
@@ -121,21 +127,38 @@ export function permissionAvailability(features: GrantedFeatures): PermissionAva
 
 async function listEvery<T>(
   list: (options: { limit: number; offset: number }) => Promise<Page<T>>,
+  signal?: AbortSignal,
+  onPage?: (current: number, total: number) => void,
 ): Promise<T[]> {
   const values: T[] = []
   const limit = 200
   let offset = 0
 
   for (;;) {
+    checkCancelled(signal)
     const page = await list({ limit, offset })
+    checkCancelled(signal)
     values.push(...page.data)
     offset += page.data.length
+    onPage?.(values.length, page.total)
     if (offset >= page.total || page.data.length === 0) return values
   }
 }
 
-export async function listAllCharacters(api: ScannerApi): Promise<CharacterRecord[]> {
-  return listEvery((options) => api.listCharacters(options))
+export async function listAllCharacters(
+  api: ScannerApi,
+  signal?: AbortSignal,
+  onProgress?: ScanProgressCallback,
+): Promise<CharacterRecord[]> {
+  return listEvery(
+    (options) => api.listCharacters(options),
+    signal,
+    (current, total) => onProgress?.('collecting', current, total),
+  )
+}
+
+function checkCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('SCAN_CANCELLED')
 }
 
 async function countText(api: ScannerApi, text: string): Promise<TokenCount> {
@@ -256,16 +279,22 @@ async function mapConcurrent<T, R>(
   values: T[],
   concurrency: number,
   mapper: (value: T) => Promise<R>,
+  signal?: AbortSignal,
+  onComplete?: (completed: number, total: number) => void,
 ): Promise<R[]> {
   const results = new Array<R>(values.length)
   let nextIndex = 0
+  let completed = 0
 
   const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
     for (;;) {
+      checkCancelled(signal)
       const index = nextIndex
       nextIndex += 1
       if (index >= values.length) return
       results[index] = await mapper(values[index]!)
+      completed += 1
+      onComplete?.(completed, values.length)
     }
   })
 
@@ -290,7 +319,9 @@ async function enrichCharacter(
   features: GrantedFeatures,
   availabilityState: PermissionAvailability,
   lorebookCache: Map<string, Promise<LorebookDetails>>,
+  signal?: AbortSignal,
 ): Promise<CardComparison> {
+  checkCancelled(signal)
   const warnings: string[] = []
   const extensionPayload = classifyExtensionPayload(character.extensions)
   const embeddedLumiScripts = extensionPayload
@@ -316,6 +347,7 @@ async function enrichCharacter(
         return pending
       }),
     )
+    checkCancelled(signal)
     lorebookEntries = books.reduce((total, book) => total + book.entries, 0)
     lorebookText = books.map((book) => book.text).filter(Boolean).join('\n\n')
     for (const book of books) {
@@ -335,6 +367,7 @@ async function enrichCharacter(
       markPartial(availabilityState, 'regexScripts')
     }
   }
+  checkCancelled(signal)
 
   let images: ImageSummary[] = []
   let storedImages: number | null = features.images ? 0 : null
@@ -353,6 +386,7 @@ async function enrichCharacter(
       images = []
     }
   }
+  checkCancelled(signal)
 
   const storedReferences = new Set<string>()
   for (const image of images) {
@@ -440,18 +474,30 @@ export async function scanDuplicates(
   features: GrantedFeatures,
   mode: MatchMode,
   similarityThreshold: number,
+  signal?: AbortSignal,
+  onProgress?: ScanProgressCallback,
 ): Promise<ScanResult> {
   if (!features.characters) throw new Error('PERMISSION_DENIED: characters')
 
-  const characters = await listAllCharacters(api)
+  onProgress?.('collecting', 0, 0)
+  const characters = await listAllCharacters(api, signal, onProgress)
+  checkCancelled(signal)
+  onProgress?.('matching', 0, characters.length)
   const rawGroups = findDuplicateGroups(characters, mode, similarityThreshold)
+  onProgress?.('matching', characters.length, characters.length)
   const duplicateIds = new Set(rawGroups.flatMap((group) => group.characterIds))
   const candidates = characters.filter((character) => duplicateIds.has(character.id))
   const availabilityState = permissionAvailability(features)
   const lorebookCache = new Map<string, Promise<LorebookDetails>>()
-  const enriched = await mapConcurrent(candidates, 6, (character) =>
-    enrichCharacter(api, character, features, availabilityState, lorebookCache),
+  onProgress?.('enriching', 0, candidates.length)
+  const enriched = await mapConcurrent(
+    candidates,
+    6,
+    (character) => enrichCharacter(api, character, features, availabilityState, lorebookCache, signal),
+    signal,
+    (current, total) => onProgress?.('enriching', current, total),
   )
+  checkCancelled(signal)
   const cardsById = new Map(enriched.map((card) => [card.id, card]))
   const optionalUnavailable =
     !features.worldBooks || !features.images || !features.regexScripts

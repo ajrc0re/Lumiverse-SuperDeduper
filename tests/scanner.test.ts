@@ -84,6 +84,28 @@ function createApi(cards: CharacterRecord[]) {
 }
 
 describe('duplicate scan orchestration', () => {
+  test('reports measured collection, matching, and enrichment progress', async () => {
+    const { api } = createApi([character('a', { name: 'Same' }), character('b', { name: 'Same' })])
+    const progress: Array<[string, number, number]> = []
+    await scanDuplicates(api, {
+      characters: true, worldBooks: false, images: false, regexScripts: false,
+    }, 'name', 0.9, undefined, (phase, current, total) => progress.push([phase, current, total]))
+    expect(progress).toContainEqual(['collecting', 2, 2])
+    expect(progress).toContainEqual(['matching', 2, 2])
+    expect(progress).toContainEqual(['enriching', 2, 2])
+  })
+
+  test('stops before further work when its cancellation signal is aborted', async () => {
+    const { api, calls } = createApi([character('a'), character('b')])
+    const controller = new AbortController()
+    controller.abort()
+    await expect(scanDuplicates(api, {
+      characters: true, worldBooks: true, images: true, regexScripts: true,
+    }, 'name', 0.9, controller.signal)).rejects.toThrow('SCAN_CANCELLED')
+    expect(calls.characterPages).toBe(0)
+    expect(calls.tokenCounts).toBe(0)
+  })
+
   test('paginates characters, enriches candidates only, and caches shared lorebooks', async () => {
     const cards = [
       character('a', {

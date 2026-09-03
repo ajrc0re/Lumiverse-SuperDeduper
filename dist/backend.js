@@ -284,20 +284,27 @@ function permissionAvailability(features) {
     regexScripts: availability(features.regexScripts)
   };
 }
-async function listEvery(list) {
+async function listEvery(list, signal, onPage) {
   const values = [];
   const limit = 200;
   let offset = 0;
   for (;; ) {
+    checkCancelled(signal);
     const page = await list({ limit, offset });
+    checkCancelled(signal);
     values.push(...page.data);
     offset += page.data.length;
+    onPage?.(values.length, page.total);
     if (offset >= page.total || page.data.length === 0)
       return values;
   }
 }
-async function listAllCharacters(api) {
-  return listEvery((options) => api.listCharacters(options));
+async function listAllCharacters(api, signal, onProgress) {
+  return listEvery((options) => api.listCharacters(options), signal, (current, total) => onProgress?.("collecting", current, total));
+}
+function checkCancelled(signal) {
+  if (signal?.aborted)
+    throw new Error("SCAN_CANCELLED");
 }
 async function countText(api, text) {
   if (!text)
@@ -407,16 +414,20 @@ async function loadImages(api, characterId) {
   }
   return [...unique.values()];
 }
-async function mapConcurrent(values, concurrency, mapper) {
+async function mapConcurrent(values, concurrency, mapper, signal, onComplete) {
   const results = new Array(values.length);
   let nextIndex = 0;
+  let completed = 0;
   const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
     for (;; ) {
+      checkCancelled(signal);
       const index = nextIndex;
       nextIndex += 1;
       if (index >= values.length)
         return;
       results[index] = await mapper(values[index]);
+      completed += 1;
+      onComplete?.(completed, values.length);
     }
   });
   await Promise.all(workers);
@@ -429,7 +440,8 @@ function markPartial(availabilityState, key) {
   if (availabilityState[key] === "available")
     availabilityState[key] = "partial";
 }
-async function enrichCharacter(api, character, features, availabilityState, lorebookCache) {
+async function enrichCharacter(api, character, features, availabilityState, lorebookCache, signal) {
+  checkCancelled(signal);
   const warnings = [];
   const extensionPayload = classifyExtensionPayload(character.extensions);
   const embeddedLumiScripts = extensionPayload.filter((entry) => entry.category === "lumiscripts").reduce((total, entry) => total + entry.count, 0);
@@ -448,6 +460,7 @@ async function enrichCharacter(api, character, features, availabilityState, lore
       }
       return pending;
     }));
+    checkCancelled(signal);
     lorebookEntries = books.reduce((total, book) => total + book.entries, 0);
     lorebookText = books.map((book) => book.text).filter(Boolean).join(`
 
@@ -468,6 +481,7 @@ async function enrichCharacter(api, character, features, availabilityState, lore
       markPartial(availabilityState, "regexScripts");
     }
   }
+  checkCancelled(signal);
   let images = [];
   let storedImages = features.images ? 0 : null;
   let avatarUrl = null;
@@ -484,6 +498,7 @@ async function enrichCharacter(api, character, features, availabilityState, lore
       images = [];
     }
   }
+  checkCancelled(signal);
   const storedReferences = new Set;
   for (const image of images) {
     storedReferences.add(image.id);
@@ -546,16 +561,22 @@ async function enrichCharacter(api, character, features, availabilityState, lore
     warnings
   };
 }
-async function scanDuplicates(api, features, mode, similarityThreshold) {
+async function scanDuplicates(api, features, mode, similarityThreshold, signal, onProgress) {
   if (!features.characters)
     throw new Error("PERMISSION_DENIED: characters");
-  const characters = await listAllCharacters(api);
+  onProgress?.("collecting", 0, 0);
+  const characters = await listAllCharacters(api, signal, onProgress);
+  checkCancelled(signal);
+  onProgress?.("matching", 0, characters.length);
   const rawGroups = findDuplicateGroups(characters, mode, similarityThreshold);
+  onProgress?.("matching", characters.length, characters.length);
   const duplicateIds = new Set(rawGroups.flatMap((group) => group.characterIds));
   const candidates = characters.filter((character) => duplicateIds.has(character.id));
   const availabilityState = permissionAvailability(features);
   const lorebookCache = new Map;
-  const enriched = await mapConcurrent(candidates, 6, (character) => enrichCharacter(api, character, features, availabilityState, lorebookCache));
+  onProgress?.("enriching", 0, candidates.length);
+  const enriched = await mapConcurrent(candidates, 6, (character) => enrichCharacter(api, character, features, availabilityState, lorebookCache, signal), signal, (current, total) => onProgress?.("enriching", current, total));
+  checkCancelled(signal);
   const cardsById = new Map(enriched.map((card) => [card.id, card]));
   const optionalUnavailable = !features.worldBooks || !features.images || !features.regexScripts;
   const groups = rawGroups.map((rawGroup) => {
@@ -658,6 +679,10 @@ async function deleteCharacterSafely(api, characterId, expectedUpdatedAt) {
 }
 
 // src/backend.ts
+var activeScans = new Map;
+function scanOwnerKey(userId) {
+  return userId ?? "__extension_owner__";
+}
 function grantedFeatures() {
   return {
     characters: spindle.permissions.has("characters"),
@@ -693,6 +718,10 @@ function isFrontendRequest(payload) {
     const request = payload;
     return typeof request.requestId === "string" && isMatchMode(request.mode);
   }
+  if (type === "cancel_scan") {
+    const request = payload;
+    return typeof request.requestId === "string";
+  }
   if (type === "delete_card") {
     const request = payload;
     return typeof request.requestId === "string" && typeof request.characterId === "string" && typeof request.expectedUpdatedAt === "number";
@@ -707,12 +736,27 @@ function errorMessage2(error) {
   return error instanceof Error ? error.message : String(error);
 }
 async function handleScan(request, userId) {
+  const ownerKey = scanOwnerKey(userId);
+  if (activeScans.has(ownerKey)) {
+    send({ type: "scan_error", requestId: request.requestId, error: "A scan is already running for this user.", permissionDenied: false }, userId);
+    return;
+  }
+  const controller = new AbortController;
+  activeScans.set(ownerKey, { requestId: request.requestId, controller });
   send({ type: "scan_started", requestId: request.requestId }, userId);
   try {
     const threshold = Number.isFinite(request.similarityThreshold) ? Math.min(1, Math.max(0.75, request.similarityThreshold)) : 0.9;
-    const result = await scanDuplicates(scannerApiFor(userId), grantedFeatures(), request.mode, threshold);
+    const result = await scanDuplicates(scannerApiFor(userId), grantedFeatures(), request.mode, threshold, controller.signal, (phase, current, total) => {
+      if (!controller.signal.aborted) {
+        send({ type: "scan_progress", requestId: request.requestId, phase, current, total }, userId);
+      }
+    });
+    if (controller.signal.aborted)
+      return;
     send({ type: "scan_result", requestId: request.requestId, result }, userId);
   } catch (error) {
+    if (controller.signal.aborted || errorMessage2(error) === "SCAN_CANCELLED")
+      return;
     const message = errorMessage2(error);
     send({
       type: "scan_error",
@@ -720,6 +764,42 @@ async function handleScan(request, userId) {
       error: message,
       permissionDenied: message.startsWith("PERMISSION_DENIED:")
     }, userId);
+  } finally {
+    const active = activeScans.get(ownerKey);
+    if (active?.requestId === request.requestId)
+      activeScans.delete(ownerKey);
+  }
+}
+async function handleCancelScan(request, userId) {
+  const ownerKey = scanOwnerKey(userId);
+  const active = activeScans.get(ownerKey);
+  if (!active || active.requestId !== request.requestId) {
+    send({ type: "scan_cancel_result", requestId: request.requestId, cancelled: false, error: "The scan is no longer running." }, userId);
+    return;
+  }
+  try {
+    const confirmation = await spindle.modal.confirm({
+      title: "Stop duplicate scan?",
+      message: "Stop the current scan and discard any results it has produced?",
+      variant: "danger",
+      confirmLabel: "Stop search",
+      cancelLabel: "Continue scanning",
+      ...userId ? { userId } : {}
+    });
+    if (!confirmation.confirmed) {
+      send({ type: "scan_cancel_result", requestId: request.requestId, cancelled: false }, userId);
+      return;
+    }
+    const current = activeScans.get(ownerKey);
+    if (!current || current.requestId !== request.requestId) {
+      send({ type: "scan_cancel_result", requestId: request.requestId, cancelled: false, error: "The scan finished before it could be stopped." }, userId);
+      return;
+    }
+    current.controller.abort();
+    activeScans.delete(ownerKey);
+    send({ type: "scan_cancel_result", requestId: request.requestId, cancelled: true }, userId);
+  } catch (error) {
+    send({ type: "scan_cancel_result", requestId: request.requestId, cancelled: false, error: errorMessage2(error) }, userId);
   }
 }
 async function handleDelete(request, userId) {
@@ -814,6 +894,8 @@ spindle.onFrontendMessage((payload, userId) => {
     send({ type: "status_result", availability: permissionAvailability(grantedFeatures()) }, userId);
   } else if (payload.type === "scan_duplicates") {
     handleScan(payload, userId);
+  } else if (payload.type === "cancel_scan") {
+    handleCancelScan(payload, userId);
   } else if (payload.type === "delete_card") {
     handleDelete(payload, userId);
   } else {

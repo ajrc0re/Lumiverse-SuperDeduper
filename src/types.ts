@@ -154,6 +154,7 @@ export type FrontendRequest =
       mode: MatchMode
       similarityThreshold: number
     }
+  | { type: 'cancel_scan'; requestId: string }
   | {
       type: 'delete_card'
       requestId: string
@@ -170,8 +171,16 @@ export type FrontendRequest =
 export type BackendResponse =
   | { type: 'status_result'; availability: PermissionAvailability }
   | { type: 'scan_started'; requestId: string }
+  | {
+      type: 'scan_progress'
+      requestId: string
+      phase: 'collecting' | 'matching' | 'enriching'
+      current: number
+      total: number
+    }
   | { type: 'scan_result'; requestId: string; result: ScanResult }
   | { type: 'scan_error'; requestId: string; error: string; permissionDenied: boolean }
+  | { type: 'scan_cancel_result'; requestId: string; cancelled: boolean; error?: string }
   | { type: 'results_stale'; reason: string }
   | {
       type: 'delete_result'

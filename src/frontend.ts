@@ -1,5 +1,6 @@
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 
+import { matchesWildcardSearch } from './search'
 import { CORE_FIELD_KEYS, type BackendResponse, type CardComparison, type DuplicateGroup, type MatchMode, type PermissionAvailability, type ScanResult } from './types'
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -86,6 +87,9 @@ export function setup(ctx: SpindleFrontendContext) {
     .sd-button--secondary { background: var(--lumiverse-fill); color: var(--lumiverse-text); }
     .sd-button--danger { background: var(--lumiverse-danger, #c84646); }
     .sd-actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+    .sd-progress { padding: 10px 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); display: flex; flex-direction: column; gap: 6px; }
+    .sd-progress[hidden] { display: none; }
+    .sd-progress progress { width: 100%; height: 12px; accent-color: var(--lumiverse-accent, #7866ff); }
     .sd-notice { padding: 10px 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); font-size: .85rem; }
     .sd-notice--warning { border-color: var(--lumiverse-warning, #d69e2e); }
     .sd-notice--error { border-color: var(--lumiverse-danger, #c84646); }
@@ -205,6 +209,12 @@ export function setup(ctx: SpindleFrontendContext) {
   actions.append(scanButton, status)
   controls.append(modeField, thresholdField, searchField, actions)
   root.append(controls)
+  const progressPanel = element('div', 'sd-progress')
+  progressPanel.hidden = true
+  const progressBar = element('progress')
+  const progressLabel = element('span', 'sd-muted', 'Preparing scan…')
+  progressPanel.append(progressBar, progressLabel)
+  root.append(progressPanel)
   root.append(element('div', 'sd-separator', '◆'))
 
   const summary = element('div', 'sd-summary')
@@ -220,9 +230,17 @@ export function setup(ctx: SpindleFrontendContext) {
   let similarityThreshold = 90
   let searchQuery = ''
   let scanTimeoutId: number | null = null
+  let cancelRequestPending = false
   let backendStatusTimeoutId: number | null = null
   const selectedKeepers = new Map<string, string>()
   const collapsedGroups = new Set<string>()
+
+  function updateScanButton(): void {
+    const scanning = currentScanRequestId !== null
+    scanButton.textContent = scanning ? 'Stop search' : 'Scan characters'
+    scanButton.classList.toggle('sd-button--danger', scanning)
+    scanButton.disabled = !charactersAvailable || cancelRequestPending
+  }
 
   type Control<T> = { getValue: () => T; setValue?: (value: T) => void; destroy: () => void }
   const components = (ctx as SpindleFrontendContext & {
@@ -274,7 +292,7 @@ export function setup(ctx: SpindleFrontendContext) {
     searchSlot.replaceChildren()
     const input = element('input', 'sd-native-control')
     input.type = 'search'
-    input.placeholder = 'Name, creator, tag, or character ID'
+    input.placeholder = 'Name, creator, tag, or character ID (* wildcard supported)'
     input.setAttribute('aria-label', 'Filter duplicate results')
     const onInput = () => {
       searchQuery = input.value
@@ -333,7 +351,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (typeof components?.mountTextInput !== 'function') throw new Error('Unavailable')
     searchControl = components.mountTextInput(searchSlot, {
       value: '',
-      placeholder: 'Name, creator, tag, or character ID',
+      placeholder: 'Name, creator, tag, or character ID (* wildcard supported)',
       ariaLabel: 'Filter duplicate results',
       onChange: (value) => {
         searchQuery = value
@@ -346,7 +364,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function setPermissionState(availability: PermissionAvailability): void {
     charactersAvailable = availability.characters !== 'unavailable'
-    scanButton.disabled = !charactersAvailable || currentScanRequestId !== null
+    updateScanButton()
     permissionNotice.replaceChildren()
 
     if (!charactersAvailable) {
@@ -393,8 +411,12 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     const requestId = createRequestId()
     currentScanRequestId = requestId
-    scanButton.disabled = true
+    cancelRequestPending = false
+    updateScanButton()
     status.textContent = 'Scan request sent…'
+    progressPanel.hidden = false
+    progressBar.removeAttribute('value')
+    progressLabel.textContent = 'Waiting for the backend to start…'
     staleNotice.hidden = true
     try {
       ctx.sendToBackend({
@@ -405,7 +427,8 @@ export function setup(ctx: SpindleFrontendContext) {
       })
     } catch (error) {
       currentScanRequestId = null
-      scanButton.disabled = !charactersAvailable
+      updateScanButton()
+      progressPanel.hidden = true
       status.textContent = 'Could not send the scan request.'
       results.replaceChildren(
         element('div', 'sd-notice sd-notice--error', error instanceof Error ? error.message : String(error)),
@@ -416,7 +439,8 @@ export function setup(ctx: SpindleFrontendContext) {
     scanTimeoutId = window.setTimeout(() => {
       if (currentScanRequestId !== requestId) return
       currentScanRequestId = null
-      scanButton.disabled = !charactersAvailable
+      updateScanButton()
+      progressPanel.hidden = true
       status.textContent = 'The backend did not respond. Reload or re-enable the extension, then try again.'
       results.replaceChildren(
         element(
@@ -450,10 +474,7 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function cardMatchesSearch(card: CardComparison, query: string): boolean {
-    const haystack = [card.id, card.name, card.creator, ...card.tags]
-      .join('\n')
-      .toLocaleLowerCase()
-    return haystack.includes(query)
+    return matchesWildcardSearch([card.id, card.name, card.creator, ...card.tags], query)
   }
 
   function appendCardBadges(container: HTMLElement, card: CardComparison, group: DuplicateGroup): void {
@@ -796,7 +817,21 @@ export function setup(ctx: SpindleFrontendContext) {
 
   const onScanClick = (event: MouseEvent) => {
     event.preventDefault()
-    startScan()
+    if (currentScanRequestId) {
+      if (cancelRequestPending) return
+      cancelRequestPending = true
+      updateScanButton()
+      status.textContent = 'Waiting for confirmation to stop the scan…'
+      try {
+        ctx.sendToBackend({ type: 'cancel_scan', requestId: currentScanRequestId })
+      } catch (error) {
+        cancelRequestPending = false
+        updateScanButton()
+        status.textContent = `Could not request cancellation: ${error instanceof Error ? error.message : String(error)}`
+      }
+    } else {
+      startScan()
+    }
   }
   const onScanKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Enter') return
@@ -843,11 +878,16 @@ export function setup(ctx: SpindleFrontendContext) {
     if (message.type === 'scan_started') {
       if (message.requestId === currentScanRequestId) {
         status.textContent = 'Scanning the full character library and inspecting duplicate payloads…'
+        progressPanel.hidden = false
+        progressBar.removeAttribute('value')
+        progressLabel.textContent = 'Collecting character cards…'
         if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
         scanTimeoutId = window.setTimeout(() => {
           if (currentScanRequestId !== message.requestId) return
           currentScanRequestId = null
-          scanButton.disabled = !charactersAvailable
+          cancelRequestPending = false
+          updateScanButton()
+          progressPanel.hidden = true
           status.textContent = 'The acknowledged scan did not finish within 10 minutes.'
           results.replaceChildren(
             element(
@@ -860,14 +900,35 @@ export function setup(ctx: SpindleFrontendContext) {
       }
       return
     }
+    if (message.type === 'scan_progress') {
+      if (message.requestId !== currentScanRequestId) return
+      progressPanel.hidden = false
+      if (message.total > 0) {
+        progressBar.max = message.total
+        progressBar.value = Math.min(message.current, message.total)
+      } else {
+        progressBar.removeAttribute('value')
+      }
+      const phaseLabel = message.phase === 'collecting'
+        ? 'Collecting cards'
+        : message.phase === 'matching'
+          ? 'Comparing cards'
+          : 'Inspecting duplicate payloads'
+      progressLabel.textContent = message.total > 0
+        ? `${phaseLabel}: ${message.current.toLocaleString()} of ${message.total.toLocaleString()}`
+        : `${phaseLabel}…`
+      return
+    }
     if (message.type === 'scan_result') {
       if (message.requestId !== currentScanRequestId) return
       if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
       scanTimeoutId = null
       currentScanRequestId = null
+      cancelRequestPending = false
       currentResult = message.result
       activeDeleteRequestId = null
       setPermissionState(message.result.availability)
+      progressPanel.hidden = true
       status.textContent = `Scan completed ${formatDate(message.result.scannedAt)}.`
       staleNotice.hidden = true
       renderResults()
@@ -878,10 +939,33 @@ export function setup(ctx: SpindleFrontendContext) {
       if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
       scanTimeoutId = null
       currentScanRequestId = null
-      scanButton.disabled = !charactersAvailable
+      cancelRequestPending = false
+      updateScanButton()
+      progressPanel.hidden = true
       status.textContent = 'Scan failed.'
       results.replaceChildren(element('div', 'sd-notice sd-notice--error', message.error))
       if (message.permissionDenied) ctx.sendToBackend({ type: 'get_status' })
+      return
+    }
+    if (message.type === 'scan_cancel_result') {
+      if (message.requestId !== currentScanRequestId) return
+      cancelRequestPending = false
+      if (!message.cancelled) {
+        updateScanButton()
+        status.textContent = message.error ?? 'Cancellation dismissed. Scan is continuing…'
+        return
+      }
+      if (scanTimeoutId !== null) window.clearTimeout(scanTimeoutId)
+      scanTimeoutId = null
+      currentScanRequestId = null
+      currentResult = null
+      selectedKeepers.clear()
+      collapsedGroups.clear()
+      updateScanButton()
+      progressPanel.hidden = true
+      status.textContent = 'Scan stopped. Partial results were discarded.'
+      staleNotice.hidden = true
+      renderResults()
       return
     }
     if (message.type === 'delete_result') {

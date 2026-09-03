@@ -1,3 +1,21 @@
+// src/search.ts
+var WHITESPACE = /\s+/gu;
+function normalize(value) {
+  return value.normalize("NFKC").toLowerCase().trim().replace(WHITESPACE, " ");
+}
+function matchesWildcardSearch(values, query) {
+  const normalizedQuery = normalize(query);
+  if (!normalizedQuery)
+    return true;
+  const normalizedValues = values.map(normalize);
+  if (!normalizedQuery.includes("*")) {
+    return normalizedValues.some((value) => value.includes(normalizedQuery));
+  }
+  const pattern = normalizedQuery.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+  const matcher = new RegExp(pattern, "u");
+  return normalizedValues.some((value) => matcher.test(value));
+}
+
 // src/types.ts
 var CORE_FIELD_KEYS = [
   "description",
@@ -84,6 +102,9 @@ function setup(ctx) {
     .sd-button--secondary { background: var(--lumiverse-fill); color: var(--lumiverse-text); }
     .sd-button--danger { background: var(--lumiverse-danger, #c84646); }
     .sd-actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+    .sd-progress { padding: 10px 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); display: flex; flex-direction: column; gap: 6px; }
+    .sd-progress[hidden] { display: none; }
+    .sd-progress progress { width: 100%; height: 12px; accent-color: var(--lumiverse-accent, #7866ff); }
     .sd-notice { padding: 10px 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); font-size: .85rem; }
     .sd-notice--warning { border-color: var(--lumiverse-warning, #d69e2e); }
     .sd-notice--error { border-color: var(--lumiverse-danger, #c84646); }
@@ -188,6 +209,12 @@ function setup(ctx) {
   actions.append(scanButton, status);
   controls.append(modeField, thresholdField, searchField, actions);
   root.append(controls);
+  const progressPanel = element("div", "sd-progress");
+  progressPanel.hidden = true;
+  const progressBar = element("progress");
+  const progressLabel = element("span", "sd-muted", "Preparing scan…");
+  progressPanel.append(progressBar, progressLabel);
+  root.append(progressPanel);
   root.append(element("div", "sd-separator", "◆"));
   const summary = element("div", "sd-summary");
   const results = element("div");
@@ -201,9 +228,16 @@ function setup(ctx) {
   let similarityThreshold = 90;
   let searchQuery = "";
   let scanTimeoutId = null;
+  let cancelRequestPending = false;
   let backendStatusTimeoutId = null;
   const selectedKeepers = new Map;
   const collapsedGroups = new Set;
+  function updateScanButton() {
+    const scanning = currentScanRequestId !== null;
+    scanButton.textContent = scanning ? "Stop search" : "Scan characters";
+    scanButton.classList.toggle("sd-button--danger", scanning);
+    scanButton.disabled = !charactersAvailable || cancelRequestPending;
+  }
   const components = ctx.components;
   function nativeModeControl() {
     modeSlot.replaceChildren();
@@ -253,7 +287,7 @@ function setup(ctx) {
     searchSlot.replaceChildren();
     const input = element("input", "sd-native-control");
     input.type = "search";
-    input.placeholder = "Name, creator, tag, or character ID";
+    input.placeholder = "Name, creator, tag, or character ID (* wildcard supported)";
     input.setAttribute("aria-label", "Filter duplicate results");
     const onInput = () => {
       searchQuery = input.value;
@@ -319,7 +353,7 @@ function setup(ctx) {
       throw new Error("Unavailable");
     searchControl = components.mountTextInput(searchSlot, {
       value: "",
-      placeholder: "Name, creator, tag, or character ID",
+      placeholder: "Name, creator, tag, or character ID (* wildcard supported)",
       ariaLabel: "Filter duplicate results",
       onChange: (value) => {
         searchQuery = value;
@@ -331,7 +365,7 @@ function setup(ctx) {
   }
   function setPermissionState(availability) {
     charactersAvailable = availability.characters !== "unavailable";
-    scanButton.disabled = !charactersAvailable || currentScanRequestId !== null;
+    updateScanButton();
     permissionNotice.replaceChildren();
     if (!charactersAvailable) {
       permissionNotice.hidden = false;
@@ -369,8 +403,12 @@ function setup(ctx) {
     }
     const requestId = createRequestId();
     currentScanRequestId = requestId;
-    scanButton.disabled = true;
+    cancelRequestPending = false;
+    updateScanButton();
     status.textContent = "Scan request sent…";
+    progressPanel.hidden = false;
+    progressBar.removeAttribute("value");
+    progressLabel.textContent = "Waiting for the backend to start…";
     staleNotice.hidden = true;
     try {
       ctx.sendToBackend({
@@ -381,7 +419,8 @@ function setup(ctx) {
       });
     } catch (error) {
       currentScanRequestId = null;
-      scanButton.disabled = !charactersAvailable;
+      updateScanButton();
+      progressPanel.hidden = true;
       status.textContent = "Could not send the scan request.";
       results.replaceChildren(element("div", "sd-notice sd-notice--error", error instanceof Error ? error.message : String(error)));
       return;
@@ -392,7 +431,8 @@ function setup(ctx) {
       if (currentScanRequestId !== requestId)
         return;
       currentScanRequestId = null;
-      scanButton.disabled = !charactersAvailable;
+      updateScanButton();
+      progressPanel.hidden = true;
       status.textContent = "The backend did not respond. Reload or re-enable the extension, then try again.";
       results.replaceChildren(element("div", "sd-notice sd-notice--error", "The backend did not acknowledge the scan request within 15 seconds."));
     }, 15000);
@@ -418,9 +458,7 @@ function setup(ctx) {
     }
   }
   function cardMatchesSearch(card, query) {
-    const haystack = [card.id, card.name, card.creator, ...card.tags].join(`
-`).toLocaleLowerCase();
-    return haystack.includes(query);
+    return matchesWildcardSearch([card.id, card.name, card.creator, ...card.tags], query);
   }
   function appendCardBadges(container, card, group) {
     const match = Math.round(maxSimilarity(group, card.id) * 100);
@@ -708,7 +746,22 @@ function setup(ctx) {
   }
   const onScanClick = (event) => {
     event.preventDefault();
-    startScan();
+    if (currentScanRequestId) {
+      if (cancelRequestPending)
+        return;
+      cancelRequestPending = true;
+      updateScanButton();
+      status.textContent = "Waiting for confirmation to stop the scan…";
+      try {
+        ctx.sendToBackend({ type: "cancel_scan", requestId: currentScanRequestId });
+      } catch (error) {
+        cancelRequestPending = false;
+        updateScanButton();
+        status.textContent = `Could not request cancellation: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    } else {
+      startScan();
+    }
   };
   const onScanKeyDown = (event) => {
     if (event.key !== "Enter")
@@ -757,17 +810,36 @@ function setup(ctx) {
     if (message.type === "scan_started") {
       if (message.requestId === currentScanRequestId) {
         status.textContent = "Scanning the full character library and inspecting duplicate payloads…";
+        progressPanel.hidden = false;
+        progressBar.removeAttribute("value");
+        progressLabel.textContent = "Collecting character cards…";
         if (scanTimeoutId !== null)
           window.clearTimeout(scanTimeoutId);
         scanTimeoutId = window.setTimeout(() => {
           if (currentScanRequestId !== message.requestId)
             return;
           currentScanRequestId = null;
-          scanButton.disabled = !charactersAvailable;
+          cancelRequestPending = false;
+          updateScanButton();
+          progressPanel.hidden = true;
           status.textContent = "The acknowledged scan did not finish within 10 minutes.";
           results.replaceChildren(element("div", "sd-notice sd-notice--error", "The backend started this scan but did not return a result. Check the Lumiverse server log for the extension error."));
         }, 600000);
       }
+      return;
+    }
+    if (message.type === "scan_progress") {
+      if (message.requestId !== currentScanRequestId)
+        return;
+      progressPanel.hidden = false;
+      if (message.total > 0) {
+        progressBar.max = message.total;
+        progressBar.value = Math.min(message.current, message.total);
+      } else {
+        progressBar.removeAttribute("value");
+      }
+      const phaseLabel = message.phase === "collecting" ? "Collecting cards" : message.phase === "matching" ? "Comparing cards" : "Inspecting duplicate payloads";
+      progressLabel.textContent = message.total > 0 ? `${phaseLabel}: ${message.current.toLocaleString()} of ${message.total.toLocaleString()}` : `${phaseLabel}…`;
       return;
     }
     if (message.type === "scan_result") {
@@ -777,9 +849,11 @@ function setup(ctx) {
         window.clearTimeout(scanTimeoutId);
       scanTimeoutId = null;
       currentScanRequestId = null;
+      cancelRequestPending = false;
       currentResult = message.result;
       activeDeleteRequestId = null;
       setPermissionState(message.result.availability);
+      progressPanel.hidden = true;
       status.textContent = `Scan completed ${formatDate(message.result.scannedAt)}.`;
       staleNotice.hidden = true;
       renderResults();
@@ -792,11 +866,36 @@ function setup(ctx) {
         window.clearTimeout(scanTimeoutId);
       scanTimeoutId = null;
       currentScanRequestId = null;
-      scanButton.disabled = !charactersAvailable;
+      cancelRequestPending = false;
+      updateScanButton();
+      progressPanel.hidden = true;
       status.textContent = "Scan failed.";
       results.replaceChildren(element("div", "sd-notice sd-notice--error", message.error));
       if (message.permissionDenied)
         ctx.sendToBackend({ type: "get_status" });
+      return;
+    }
+    if (message.type === "scan_cancel_result") {
+      if (message.requestId !== currentScanRequestId)
+        return;
+      cancelRequestPending = false;
+      if (!message.cancelled) {
+        updateScanButton();
+        status.textContent = message.error ?? "Cancellation dismissed. Scan is continuing…";
+        return;
+      }
+      if (scanTimeoutId !== null)
+        window.clearTimeout(scanTimeoutId);
+      scanTimeoutId = null;
+      currentScanRequestId = null;
+      currentResult = null;
+      selectedKeepers.clear();
+      collapsedGroups.clear();
+      updateScanButton();
+      progressPanel.hidden = true;
+      status.textContent = "Scan stopped. Partial results were discarded.";
+      staleNotice.hidden = true;
+      renderResults();
       return;
     }
     if (message.type === "delete_result") {
