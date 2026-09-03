@@ -5,6 +5,7 @@ import type {
   CharacterRecord,
   FrontendRequest,
   MatchMode,
+  SearchField,
 } from './types'
 
 declare const spindle: import('lumiverse-spindle-types').SpindleAPI
@@ -52,6 +53,10 @@ function isMatchMode(value: unknown): value is MatchMode {
   return value === 'name' || value === 'exact' || value === 'similar'
 }
 
+function isSearchField(value: unknown): value is SearchField {
+  return value === 'name' || value === 'creator' || value === 'tag' || value === 'id'
+}
+
 function isFrontendRequest(payload: unknown): payload is FrontendRequest {
   if (!payload || typeof payload !== 'object' || !('type' in payload)) return false
   const type = (payload as { type?: unknown }).type
@@ -61,7 +66,8 @@ function isFrontendRequest(payload: unknown): payload is FrontendRequest {
     return (
       typeof request.requestId === 'string' &&
       isMatchMode(request.mode) &&
-      (request.filterQuery === undefined || typeof request.filterQuery === 'string')
+      (request.filterQuery === undefined || typeof request.filterQuery === 'string') &&
+      (request.searchField === undefined || isSearchField(request.searchField))
     )
   }
   if (type === 'cancel_scan') {
@@ -124,6 +130,7 @@ async function handleScan(
         }
       },
       request.filterQuery ?? '',
+      request.searchField ?? 'name',
     )
     if (controller.signal.aborted) return
     send({ type: 'scan_result', requestId: request.requestId, result }, userId)

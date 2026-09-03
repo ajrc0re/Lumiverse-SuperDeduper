@@ -113,6 +113,21 @@ describe('duplicate scan orchestration', () => {
     expect(progress).toContainEqual(['matching', 2, 2])
   })
 
+  test('uses the selected field to build the operated-card pool', async () => {
+    const cards = [
+      character('a1', { name: 'Alice', creator: 'Someone', description: 'Shared description '.repeat(20) }),
+      character('t1', { name: 'Tom', creator: 'Alice Studio', description: 'Shared description '.repeat(20) }),
+      character('j1', { name: 'Jerry', creator: 'Someone', description: 'Unrelated content' }),
+    ]
+    const { api } = createApi(cards)
+    const result = await scanDuplicates(api, {
+      characters: true, worldBooks: false, images: false, regexScripts: false,
+    }, 'similar', 0.9, undefined, undefined, 'alice*', 'creator')
+
+    expect(result.totalCharacters).toBe(1)
+    expect(result.groups[0]?.cards.map((card) => card.id).sort()).toEqual(['a1', 't1'])
+  })
+
   test('similarity matching yields progress while comparing many pairs', async () => {
     const cards = Array.from({ length: 33 }, (_, index) => character(String(index)))
     const { api } = createApi(cards)

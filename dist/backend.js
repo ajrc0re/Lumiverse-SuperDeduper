@@ -352,6 +352,15 @@ function formatDate(epochSeconds) {
 
 // src/search.ts
 var WHITESPACE2 = /\s+/gu;
+function searchFieldValues(card, field) {
+  if (field === "name")
+    return [card.name];
+  if (field === "creator")
+    return [card.creator];
+  if (field === "tag")
+    return card.tags;
+  return [card.id];
+}
 function normalize(value) {
   return value.normalize("NFKC").toLowerCase().trim().replace(WHITESPACE2, " ");
 }
@@ -657,13 +666,13 @@ async function enrichCharacter(api, character, features, availabilityState, lore
     warnings
   };
 }
-async function scanDuplicates(api, features, mode, similarityThreshold, signal, onProgress, filterQuery = "") {
+async function scanDuplicates(api, features, mode, similarityThreshold, signal, onProgress, filterQuery = "", searchField = "name") {
   if (!features.characters)
     throw new Error("PERMISSION_DENIED: characters");
   onProgress?.("collecting", 0, 0);
   const allCharacters = await listAllCharacters(api, signal, onProgress);
   checkCancelled(signal);
-  const operatedCharacters = allCharacters.filter((character) => matchesWildcardSearch([character.name, character.creator, character.id, ...character.tags], filterQuery));
+  const operatedCharacters = allCharacters.filter((character) => matchesWildcardSearch(searchFieldValues(character, searchField), filterQuery));
   const operatedCharacterIds = new Set(operatedCharacters.map((character) => character.id));
   const characters = allCharacters;
   const unfilteredCharacters = characters.length - operatedCharacters.length;
@@ -809,6 +818,9 @@ function send(payload, userId) {
 function isMatchMode(value) {
   return value === "name" || value === "exact" || value === "similar";
 }
+function isSearchField(value) {
+  return value === "name" || value === "creator" || value === "tag" || value === "id";
+}
 function isFrontendRequest(payload) {
   if (!payload || typeof payload !== "object" || !("type" in payload))
     return false;
@@ -817,7 +829,7 @@ function isFrontendRequest(payload) {
     return true;
   if (type === "scan_duplicates") {
     const request = payload;
-    return typeof request.requestId === "string" && isMatchMode(request.mode) && (request.filterQuery === undefined || typeof request.filterQuery === "string");
+    return typeof request.requestId === "string" && isMatchMode(request.mode) && (request.filterQuery === undefined || typeof request.filterQuery === "string") && (request.searchField === undefined || isSearchField(request.searchField));
   }
   if (type === "cancel_scan") {
     const request = payload;
@@ -851,7 +863,7 @@ async function handleScan(request, userId) {
       if (!controller.signal.aborted) {
         send({ type: "scan_progress", requestId: request.requestId, phase, current, total }, userId);
       }
-    }, request.filterQuery ?? "");
+    }, request.filterQuery ?? "", request.searchField ?? "name");
     if (controller.signal.aborted)
       return;
     send({ type: "scan_result", requestId: request.requestId, result }, userId);

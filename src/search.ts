@@ -1,4 +1,20 @@
+import type { SearchField } from './types'
+
 const WHITESPACE = /\s+/gu
+
+interface SearchableCard {
+  id: string
+  name: string
+  creator: string
+  tags: string[]
+}
+
+export function searchFieldValues(card: SearchableCard, field: SearchField): string[] {
+  if (field === 'name') return [card.name]
+  if (field === 'creator') return [card.creator]
+  if (field === 'tag') return card.tags
+  return [card.id]
+}
 
 function normalize(value: string): string {
   return value.normalize('NFKC').toLowerCase().trim().replace(WHITESPACE, ' ')

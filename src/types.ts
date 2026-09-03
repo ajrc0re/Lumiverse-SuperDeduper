@@ -1,4 +1,5 @@
 export type MatchMode = 'name' | 'exact' | 'similar'
+export type SearchField = 'name' | 'creator' | 'tag' | 'id'
 
 export const CORE_FIELD_KEYS = [
   'description',
@@ -154,6 +155,7 @@ export type FrontendRequest =
       mode: MatchMode
       similarityThreshold: number
       filterQuery?: string
+      searchField?: SearchField
     }
   | { type: 'cancel_scan'; requestId: string }
   | {

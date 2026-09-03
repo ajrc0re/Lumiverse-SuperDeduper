@@ -14,9 +14,10 @@ import type {
   MatchMode,
   PermissionAvailability,
   ScanResult,
+  SearchField,
   TokenCount,
 } from './types'
-import { matchesWildcardSearch } from './search'
+import { matchesWildcardSearch, searchFieldValues } from './search'
 
 interface Page<T> {
   data: T[]
@@ -478,6 +479,7 @@ export async function scanDuplicates(
   signal?: AbortSignal,
   onProgress?: ScanProgressCallback,
   filterQuery = '',
+  searchField: SearchField = 'name',
 ): Promise<ScanResult> {
   if (!features.characters) throw new Error('PERMISSION_DENIED: characters')
 
@@ -485,7 +487,7 @@ export async function scanDuplicates(
   const allCharacters = await listAllCharacters(api, signal, onProgress)
   checkCancelled(signal)
   const operatedCharacters = allCharacters.filter((character) => matchesWildcardSearch(
-    [character.name, character.creator, character.id, ...character.tags],
+    searchFieldValues(character, searchField),
     filterQuery,
   ))
   const operatedCharacterIds = new Set(operatedCharacters.map((character) => character.id))

@@ -1,7 +1,7 @@
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 
-import { matchesWildcardSearch } from './search'
-import { CORE_FIELD_KEYS, type BackendResponse, type CardComparison, type DuplicateGroup, type MatchMode, type PermissionAvailability, type ScanResult } from './types'
+import { matchesWildcardSearch, searchFieldValues } from './search'
+import { CORE_FIELD_KEYS, type BackendResponse, type CardComparison, type DuplicateGroup, type MatchMode, type PermissionAvailability, type ScanResult, type SearchField } from './types'
 
 function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -197,8 +197,19 @@ export function setup(ctx: SpindleFrontendContext) {
   thresholdLine.append(thresholdSlot, thresholdOutput)
   thresholdField.append(thresholdLabel, thresholdLine)
 
-  const searchField = element('div', 'sd-field sd-field--wide')
-  const searchLabel = element('label', '', 'Filter results after scanning (optional)')
+  const searchScopeField = element('div', 'sd-field')
+  const searchScopeLabel = element('label', '', 'Search field')
+  const searchScopeSlot = element('div', 'sd-component-slot')
+  const searchScopeOptions: Array<{ value: SearchField; label: string }> = [
+    { value: 'name', label: 'Name' },
+    { value: 'creator', label: 'Creator' },
+    { value: 'tag', label: 'Tag' },
+    { value: 'id', label: 'Character ID' },
+  ]
+  searchScopeField.append(searchScopeLabel, searchScopeSlot)
+
+  const searchField = element('div', 'sd-field')
+  const searchLabel = element('label', '', 'Search scope and filter (optional)')
   const searchSlot = element('div', 'sd-component-slot')
   searchField.append(searchLabel, searchSlot)
 
@@ -207,7 +218,7 @@ export function setup(ctx: SpindleFrontendContext) {
   scanButton.type = 'button'
   const status = element('span', 'sd-muted', 'Scans your entire character library. Connecting to extension backend…')
   actions.append(scanButton, status)
-  controls.append(modeField, thresholdField, searchField, actions)
+  controls.append(modeField, thresholdField, searchScopeField, searchField, actions)
   root.append(controls)
   const progressPanel = element('div', 'sd-progress')
   progressPanel.hidden = true
@@ -229,6 +240,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let selectedMode: MatchMode = 'name'
   let similarityThreshold = 90
   let searchQuery = ''
+  let selectedSearchField: SearchField = 'name'
   let scanTimeoutId: number | null = null
   let cancelRequestPending = false
   let backendStatusTimeoutId: number | null = null
@@ -292,7 +304,7 @@ export function setup(ctx: SpindleFrontendContext) {
     searchSlot.replaceChildren()
     const input = element('input', 'sd-native-control')
     input.type = 'search'
-    input.placeholder = 'Name, creator, tag, or character ID (* wildcard supported)'
+    input.placeholder = 'Search text (* wildcard supported)'
     input.setAttribute('aria-label', 'Filter duplicate results')
     const onInput = () => {
       searchQuery = input.value
@@ -304,6 +316,30 @@ export function setup(ctx: SpindleFrontendContext) {
       getValue: () => input.value,
       setValue: (value) => { input.value = value },
       destroy: () => input.removeEventListener('input', onInput),
+    }
+  }
+
+  function nativeSearchScopeControl(): Control<SearchField> {
+    searchScopeSlot.replaceChildren()
+    const select = element('select', 'sd-native-control')
+    select.setAttribute('aria-label', 'Search field')
+    for (const optionData of searchScopeOptions) {
+      const option = element('option', '', optionData.label)
+      option.value = optionData.value
+      select.append(option)
+    }
+    select.value = selectedSearchField
+    const onChange = () => {
+      const value = select.value
+      if (value !== 'name' && value !== 'creator' && value !== 'tag' && value !== 'id') return
+      selectedSearchField = value
+      renderResults()
+    }
+    select.addEventListener('change', onChange)
+    searchScopeSlot.append(select)
+    return {
+      getValue: () => selectedSearchField,
+      destroy: () => select.removeEventListener('change', onChange),
     }
   }
 
@@ -351,7 +387,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (typeof components?.mountTextInput !== 'function') throw new Error('Unavailable')
     searchControl = components.mountTextInput(searchSlot, {
       value: '',
-      placeholder: 'Name, creator, tag, or character ID (* wildcard supported)',
+      placeholder: 'Search text (* wildcard supported)',
       ariaLabel: 'Filter duplicate results',
       onChange: (value) => {
         searchQuery = value
@@ -360,6 +396,25 @@ export function setup(ctx: SpindleFrontendContext) {
     })
   } catch {
     searchControl = nativeSearchControl()
+  }
+
+  let searchScopeControl: Control<SearchField>
+  try {
+    if (typeof components?.mountSelect !== 'function') throw new Error('Unavailable')
+    const mounted = components.mountSelect(searchScopeSlot, {
+      value: selectedSearchField,
+      options: searchScopeOptions,
+      ariaLabel: 'Search field',
+      portal: true,
+      onChange: (value) => {
+        if (value !== 'name' && value !== 'creator' && value !== 'tag' && value !== 'id') return
+        selectedSearchField = value
+        renderResults()
+      },
+    })
+    searchScopeControl = { getValue: () => selectedSearchField, destroy: () => mounted.destroy() }
+  } catch {
+    searchScopeControl = nativeSearchScopeControl()
   }
 
   function setPermissionState(availability: PermissionAvailability): void {
@@ -425,6 +480,7 @@ export function setup(ctx: SpindleFrontendContext) {
         mode: selectedMode,
         similarityThreshold: similarityThreshold / 100,
         filterQuery: searchControl.getValue(),
+        searchField: searchScopeControl.getValue(),
       })
     } catch (error) {
       currentScanRequestId = null
@@ -475,7 +531,7 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function cardMatchesSearch(card: CardComparison, query: string): boolean {
-    return matchesWildcardSearch([card.id, card.name, card.creator, ...card.tags], query)
+    return matchesWildcardSearch(searchFieldValues(card, selectedSearchField), query)
   }
 
   function appendCardBadges(container: HTMLElement, card: CardComparison, group: DuplicateGroup): void {
@@ -1039,6 +1095,7 @@ export function setup(ctx: SpindleFrontendContext) {
     modeControl.destroy()
     thresholdControl.destroy()
     searchControl.destroy()
+    searchScopeControl.destroy()
     tab.destroy()
     removeStyle()
   }

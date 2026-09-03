@@ -10,7 +10,7 @@ import {
   normalizeName,
   sorensenDice,
 } from '../src/core'
-import { matchesWildcardSearch } from '../src/search'
+import { matchesWildcardSearch, searchFieldValues } from '../src/search'
 import type { CardComparison, CharacterRecord, PayloadSummary } from '../src/types'
 
 test('result filtering supports asterisks as wildcards', () => {
@@ -20,6 +20,14 @@ test('result filtering supports asterisks as wildcards', () => {
   expect(matchesWildcardSearch(['Banana'], 'a*')).toBe(false)
   expect(matchesWildcardSearch(['Creator Name'], 'ator')).toBe(true)
   expect(matchesWildcardSearch(['literal.value'], 'literal.*')).toBe(true)
+})
+
+test('search field selection returns only the requested card property', () => {
+  const card = { id: 'card-1', name: 'Alice', creator: 'Tom', tags: ['Fantasy'] }
+  expect(searchFieldValues(card, 'name')).toEqual(['Alice'])
+  expect(searchFieldValues(card, 'creator')).toEqual(['Tom'])
+  expect(searchFieldValues(card, 'tag')).toEqual(['Fantasy'])
+  expect(searchFieldValues(card, 'id')).toEqual(['card-1'])
 })
 
 function character(overrides: Partial<CharacterRecord> = {}): CharacterRecord {
