@@ -1,8 +1,10 @@
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 
+import { buildComparisonRows } from './comparison'
 import { matchesWildcardSearch, searchFieldValues } from './search'
 import { activeGroupsForBulk } from './group-selection'
-import { CORE_FIELD_KEYS, type BackendResponse, type CardComparison, type DuplicateGroup, type MatchMode, type PermissionAvailability, type ScanResult, type SearchField } from './types'
+import { superDeduperStyles } from './styles'
+import { type BackendResponse, type CardComparison, type DuplicateGroup, type MatchMode, type PermissionAvailability, type ScanResult, type SearchField } from './types'
 
 function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -63,80 +65,7 @@ export function setup(ctx: SpindleFrontendContext) {
     // Older hosts do not expose manual readiness. Registration can continue normally.
   }
 
-  const removeStyle = ctx.dom.addStyle(`
-    .sd-root { padding: 14px; color: var(--lumiverse-text); display: flex; flex-direction: column; gap: 12px; }
-    .sd-header h2 { margin: 0; font-size: 1.15rem; }
-    .sd-header p, .sd-muted { color: var(--lumiverse-text-muted); margin: 4px 0 0; font-size: .86rem; }
-    .sd-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-    .sd-toolbar-spacer { flex: 1 1 36px; min-width: 24px; }
-    .sd-separator { display: flex; align-items: center; gap: 10px; min-height: 14px; color: var(--lumiverse-border); }
-    .sd-separator::before, .sd-separator::after { content: ''; height: 1px; flex: 1; background: var(--lumiverse-border); opacity: .7; }
-    .sd-separator::marker { content: ''; }
-    .sd-controls { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr); gap: 10px; padding: 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); }
-    .sd-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-    .sd-field label { font-size: .75rem; color: var(--lumiverse-text-muted); font-weight: 600; }
-    .sd-component-slot { min-width: 0; flex: 1; }
-    .sd-native-control { box-sizing: border-box; width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill); color: var(--lumiverse-text); pointer-events: auto !important; position: relative; z-index: 1; }
-    select.sd-native-control, button.sd-button { cursor: pointer; pointer-events: auto !important; position: relative; z-index: 1; }
-    input.sd-native-control { cursor: text; }
-    input[type='range'].sd-native-control { cursor: pointer; padding: 0; }
-    .sd-hidden { display: none !important; }
-    .sd-field--wide { grid-column: 1 / -1; }
-    .sd-threshold-line { display: flex; align-items: center; gap: 8px; }
-    .sd-button { min-height: 36px; padding: 7px 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-accent, #7866ff); color: white; cursor: pointer; font-weight: 650; }
-    .sd-button:disabled { cursor: not-allowed; opacity: .5; }
-    .sd-button--secondary { background: var(--lumiverse-fill); color: var(--lumiverse-text); }
-    .sd-button--danger { background: var(--lumiverse-danger, #c84646); }
-    .sd-actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
-    .sd-progress { padding: 10px 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); display: flex; flex-direction: column; gap: 6px; }
-    .sd-progress[hidden] { display: none; }
-    .sd-progress progress { width: 100%; height: 12px; accent-color: var(--lumiverse-accent, #7866ff); }
-    .sd-notice { padding: 10px 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill-subtle); font-size: .85rem; }
-    .sd-notice--warning { border-color: var(--lumiverse-warning, #d69e2e); }
-    .sd-notice--error { border-color: var(--lumiverse-danger, #c84646); }
-    .sd-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .sd-group { border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); overflow: hidden; background: var(--lumiverse-fill-subtle); }
-    .sd-group--inactive { opacity: .62; border-style: dashed; }
-    .sd-group-header { padding: 12px; border-bottom: 1px solid var(--lumiverse-border); cursor: pointer; }
-    .sd-group-header-content { display: flex; flex-direction: column; gap: 8px; margin-left: 6px; }
-    .sd-group:not([open]) .sd-group-header { border-bottom: 0; }
-    .sd-group-title { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
-    .sd-group-title h3 { margin: 0; font-size: 1rem; }
-    .sd-reasons { margin: 0; padding-left: 20px; font-size: .8rem; color: var(--lumiverse-text-muted); }
-    .sd-cards { display: flex; flex-direction: column; }
-    .sd-card { padding: 12px; display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 10px; border-bottom: 1px solid var(--lumiverse-border); }
-    .sd-card:last-child { border-bottom: 0; }
-    .sd-avatar { width: 58px; height: 78px; border-radius: var(--lumiverse-radius); object-fit: cover; background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border); }
-    .sd-avatar--empty { display: grid; place-items: center; font-size: .7rem; color: var(--lumiverse-text-muted); }
-    .sd-card-main { min-width: 0; display: flex; flex-direction: column; gap: 7px; }
-    .sd-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-    .sd-card-title strong { overflow-wrap: anywhere; }
-    .sd-card-meta { font-size: .76rem; color: var(--lumiverse-text-muted); overflow-wrap: anywhere; }
-    .sd-badges { display: flex; flex-wrap: wrap; gap: 5px; }
-    .sd-badge { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 7px; border-radius: 999px; background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border); font-size: .7rem; }
-    .sd-badge--good { border-color: var(--lumiverse-success, #3e9b68); }
-    .sd-badge--warning { border-color: var(--lumiverse-warning, #d69e2e); }
-    .sd-badge--danger { border-color: var(--lumiverse-danger, #c84646); }
-    .sd-card-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .sd-card-actions label { font-size: .78rem; display: flex; align-items: center; gap: 5px; }
-    .sd-key-list { font-size: .74rem; color: var(--lumiverse-text-muted); overflow-wrap: anywhere; }
-    .sd-images { display: flex; gap: 5px; overflow-x: auto; }
-    .sd-images img { width: 52px; height: 52px; flex: 0 0 auto; object-fit: cover; border-radius: 5px; border: 1px solid var(--lumiverse-border); }
-    .sd-compare { margin: 0 12px 12px; padding: 8px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill); }
-    .sd-compare summary { cursor: pointer; font-size: .82rem; font-weight: 650; }
-    .sd-table-wrap { overflow-x: auto; margin-top: 8px; }
-    .sd-table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: .72rem; }
-    .sd-table th, .sd-table td { text-align: left; vertical-align: top; padding: 6px; border-bottom: 1px solid var(--lumiverse-border); white-space: pre-wrap; overflow-wrap: anywhere; }
-    .sd-equal { color: var(--lumiverse-success, #3e9b68); }
-    .sd-different { color: var(--lumiverse-warning, #d69e2e); }
-    .sd-empty { text-align: center; padding: 24px 12px; color: var(--lumiverse-text-muted); }
-    @media (max-width: 540px) {
-      .sd-controls { grid-template-columns: 1fr; }
-      .sd-field--wide, .sd-actions { grid-column: 1; }
-      .sd-card { grid-template-columns: 46px minmax(0, 1fr); }
-      .sd-avatar { width: 46px; height: 64px; }
-    }
-  `)
+  const removeStyle = ctx.dom.addStyle(superDeduperStyles)
 
   const tab = ctx.ui.registerDrawerTab({
     id: 'superdeduper',
@@ -739,64 +668,158 @@ export function setup(ctx: SpindleFrontendContext) {
     return cardElement
   }
 
+  function comparisonCategoryLabel(category: string): string {
+    switch (category) {
+      case 'lumiscripts': return 'LumiScript payload'
+      case 'expressions': return 'Expression payload'
+      case 'gallery': return 'Gallery payload'
+      case 'other': return 'Other extension payload'
+      default: return 'Payload overview'
+    }
+  }
+
+  function appendComparisonCards(parent: HTMLElement, cards: Array<{ id: string; name: string }>, groupSize: number): void {
+    const list = element('div', 'sd-comparison-card-list')
+    if (cards.length === groupSize) {
+      list.append(element('div', 'sd-comparison-card', `All ${groupSize} cards`))
+    } else {
+      for (const card of cards) {
+        const item = element('div', 'sd-comparison-card')
+        item.append(document.createTextNode(card.name || 'Unnamed card'))
+        item.append(element('span', 'sd-comparison-card-id', ` · ${card.id}`))
+        list.append(item)
+      }
+    }
+    parent.append(list)
+  }
+
+  function appendComparisonValue(parent: HTMLElement, value: string): void {
+    const preview = truncate(value, 420)
+    parent.append(element('div', 'sd-comparison-value-preview', preview))
+    if (preview !== value) {
+      const fullValue = element('details', 'sd-comparison-full-value')
+      fullValue.append(element('summary', '', 'Show full value'))
+      const fullText = element('pre', '', value)
+      fullText.tabIndex = 0
+      fullText.setAttribute('aria-label', 'Full comparison value')
+      fullValue.append(fullText)
+      parent.append(fullValue)
+    }
+  }
+
+  function appendSimilarityPairs(parent: HTMLElement, group: DuplicateGroup): void {
+    if (group.mode !== 'similar' || group.matches.length === 0) return
+
+    const pairDetails = element('details', 'sd-similarity-pairs')
+    pairDetails.append(element('summary', '', `Review qualifying similarity pairs · ${group.matches.length.toLocaleString()} pairs`))
+    const content = element('div', 'sd-similarity-pairs-content')
+    const status = element('div', 'sd-muted', 'Open this section to load the first matching pairs.')
+    status.setAttribute('role', 'status')
+    const list = element('ol', 'sd-similarity-pair-list')
+    list.tabIndex = 0
+    list.setAttribute('aria-label', 'Qualifying similarity pairs')
+    const controls = element('div', 'sd-card-actions')
+    const moreButton = element('button', 'sd-button sd-button--secondary', 'Show 50 more pairs')
+    moreButton.type = 'button'
+    controls.append(moreButton)
+
+    const cardsById = new Map(group.cards.map((card) => [card.id, card]))
+    const cardLabel = (id: string): string => {
+      const card = cardsById.get(id)
+      return card ? `${card.name || 'Unnamed card'} · ${card.id}` : id
+    }
+    let visiblePairs = 0
+    const pageSize = 50
+    const appendNextPairs = (): void => {
+      const nextVisiblePairs = Math.min(group.matches.length, visiblePairs + pageSize)
+      for (const match of group.matches.slice(visiblePairs, nextVisiblePairs)) {
+        const pair = element('li', 'sd-similarity-pair')
+        pair.append(
+          element('span', 'sd-similarity-pair-cards', `${cardLabel(match.leftId)} ↔ ${cardLabel(match.rightId)}`),
+          element('span', 'sd-similarity-pair-score', `${Math.round(match.similarity * 100)}%`),
+        )
+        list.append(pair)
+      }
+      visiblePairs = nextVisiblePairs
+      status.textContent = `Showing ${visiblePairs.toLocaleString()} of ${group.matches.length.toLocaleString()} qualifying pairs.`
+      controls.hidden = visiblePairs >= group.matches.length
+    }
+    pairDetails.addEventListener('toggle', () => {
+      if (pairDetails.open && visiblePairs === 0) appendNextPairs()
+    })
+    moreButton.addEventListener('click', appendNextPairs)
+    content.append(status, list, controls)
+    pairDetails.append(content)
+    parent.append(pairDetails)
+  }
+
   function renderComparison(group: DuplicateGroup): HTMLElement {
     const details = element('details', 'sd-compare')
-    details.append(element('summary', '', 'Compare matching fields and payload keys'))
+    details.append(element('summary', '', `Compare matching fields and payload keys · ${group.cards.length} cards`))
     const wrap = element('div', 'sd-table-wrap')
-    const table = element('table', 'sd-table')
+    const table = element('table', 'sd-comparison-table')
+    table.setAttribute('aria-label', `Comparison for duplicate group with ${group.cards.length} cards`)
     const head = element('thead')
     const headingRow = element('tr')
-    headingRow.append(element('th', '', 'Field'))
-    for (const card of group.cards) headingRow.append(element('th', '', card.name || card.id))
+    const fieldHeading = element('th', 'sd-comparison-field', 'Field or payload key')
+    const cardsHeading = element('th', 'sd-comparison-cards', 'Cards')
+    const valueHeading = element('th', 'sd-comparison-value', 'Value')
+    fieldHeading.scope = 'col'
+    cardsHeading.scope = 'col'
+    valueHeading.scope = 'col'
+    headingRow.append(fieldHeading, cardsHeading, valueHeading)
     head.append(headingRow)
     table.append(head)
-    const body = element('tbody')
 
-    for (const key of CORE_FIELD_KEYS) {
-      const values = group.cards.map((card) => card.coreFields[key])
-      const equal = new Set(values).size === 1
-      const row = element('tr')
-      row.append(element('th', equal ? 'sd-equal' : 'sd-different', `${key} · ${equal ? 'equal' : 'different'}`))
-      for (const value of values) row.append(element('td', '', value ? truncate(value) : '—'))
-      body.append(row)
+    const rows = buildComparisonRows(group.cards)
+    const appendSection = (label: string, sectionRows: typeof rows): void => {
+      if (sectionRows.length === 0) return
+      const body = element('tbody')
+      const sectionRow = element('tr', 'sd-comparison-section')
+      const sectionHeading = element('th', '', label)
+      sectionHeading.colSpan = 3
+      sectionRow.append(sectionHeading)
+      body.append(sectionRow)
+
+      for (const row of sectionRows) {
+        for (const [valueIndex, valueGroup] of row.values.entries()) {
+          const comparisonRow = element('tr', 'sd-comparison-value-group')
+          if (valueIndex === 0) {
+            const field = element('th', `sd-comparison-field ${row.status === 'same' ? 'sd-equal' : 'sd-different'}`)
+            field.scope = 'row'
+            field.rowSpan = row.values.length
+            const fieldLabel = element('div', 'sd-comparison-field-label')
+            fieldLabel.append(element('span', '', row.label))
+            addBadge(fieldLabel, row.status === 'same' ? 'Same' : 'Different', row.status === 'same' ? 'good' : 'warning')
+            field.append(fieldLabel)
+            if (row.payloadCategory) field.append(element('div', 'sd-comparison-field-meta', comparisonCategoryLabel(row.payloadCategory)))
+            comparisonRow.append(field)
+          }
+
+          const cards = element('td', 'sd-comparison-cards')
+          appendComparisonCards(cards, valueGroup.cards, group.cards.length)
+          const value = element('td', 'sd-comparison-value')
+          appendComparisonValue(value, valueGroup.value)
+          comparisonRow.append(cards, value)
+          body.append(comparisonRow)
+        }
+      }
+      table.append(body)
     }
 
-    const payloadRow = element('tr')
-    payloadRow.append(element('th', '', 'Payload summary'))
-    for (const card of group.cards) {
-      payloadRow.append(
-        element(
-          'td',
-          '',
-          `${card.payload.categoryCount} categories · ${card.payload.itemCount} items · ${card.payload.otherExtensionBytes} other bytes`,
-        ),
-      )
-    }
-    body.append(payloadRow)
+    appendSection('Core card fields', rows.filter((row) => row.payloadCategory === undefined))
+    appendSection('Payload overview', rows.filter((row) => row.payloadCategory !== undefined && !row.label.startsWith('Extension key: ')))
+    appendSection('Extension payload keys', rows.filter((row) => row.label.startsWith('Extension key: ')))
 
-    if (group.mode === 'similar') {
-      const matchRow = element('tr')
-      matchRow.append(element('th', '', 'Qualifying pairs'))
-      const descriptions = group.matches.map((match) => {
-        const left = group.cards.find((card) => card.id === match.leftId)?.name ?? match.leftId
-        const right = group.cards.find((card) => card.id === match.rightId)?.name ?? match.rightId
-        return `${left} ↔ ${right}: ${Math.round(match.similarity * 100)}%`
-      })
-      const cell = element('td', '', descriptions.join('\n'))
-      cell.colSpan = group.cards.length
-      matchRow.append(cell)
-      body.append(matchRow)
-    }
-
-    table.append(body)
     wrap.append(table)
     details.append(wrap)
+    appendSimilarityPairs(details, group)
     return details
   }
 
   function renderGroup(group: DuplicateGroup, index: number): HTMLElement {
     const deactivated = deactivatedGroups.has(group.id)
-    const groupElement = element('details', `sd-group${deactivated ? ' sd-group--inactive' : ''}`)
+    const groupElement = element('details', `sd-group sd-group--${group.mode}${deactivated ? ' sd-group--inactive' : ''}`)
     groupElement.open = !collapsedGroups.has(group.id)
     groupElement.dataset.groupId = group.id
     groupElement.addEventListener('toggle', () => {
