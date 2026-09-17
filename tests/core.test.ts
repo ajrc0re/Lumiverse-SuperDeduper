@@ -174,19 +174,27 @@ describe('similarity matching', () => {
 })
 
 describe('payload classification and keeper ranking', () => {
-  test('classifies known extension payload names and preserves unknown keys', () => {
+  test('classifies known extension payload names, ignores Chub scan bookkeeping, and preserves unknown keys', () => {
     const entries = classifyExtensionPayload({
       regex_scripts: [{ id: 1 }],
       characterExpressions: { happy: 'image-1', sad: 'image-2' },
+      expressions: {
+        enabled: true,
+        defaultExpression: 'happy',
+        mappings: { happy: 'image-1', sad: 'image-2' },
+      },
+      _lumiverse_chub_expressions_checked: 1_726_000_000_000,
       image_gallery: ['image-1', 'image-1', 'https://example.test/image.png'],
       customMetadata: { importedBy: 'test' },
     })
     expect(entries.map((entry) => [entry.key, entry.category, entry.count])).toEqual([
       ['characterExpressions', 'expressions', 2],
       ['customMetadata', 'other', 1],
+      ['expressions', 'expressions', 3],
       ['image_gallery', 'gallery', 3],
       ['regex_scripts', 'lumiscripts', 1],
     ])
+    expect(entries.some((entry) => entry.key === '_lumiverse_chub_expressions_checked')).toBe(false)
     expect(entries.find((entry) => entry.key === 'image_gallery')?.references).toEqual([
       'https://example.test/image.png',
       'image-1',

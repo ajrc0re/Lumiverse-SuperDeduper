@@ -272,6 +272,9 @@ async function findDuplicateGroupsAsync(characters, mode, similarityThreshold, s
     };
   });
 }
+var IGNORED_EXTENSION_PAYLOAD_KEYS = new Set([
+  "_lumiverse_chub_expressions_checked"
+]);
 function payloadCategory(key) {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]+/gu, "_");
   if (/lumiscript|regex_script/u.test(normalized))
@@ -316,7 +319,7 @@ function collectReferences(value) {
   return [...references];
 }
 function classifyExtensionPayload(extensions) {
-  return Object.entries(extensions).map(([key, value]) => {
+  return Object.entries(extensions).filter(([key]) => !IGNORED_EXTENSION_PAYLOAD_KEYS.has(key)).map(([key, value]) => {
     const category = payloadCategory(key);
     return {
       key,
@@ -817,7 +820,7 @@ async function deleteCharacterSafely(api, characterId, expectedUpdatedAt) {
 
 // src/backend.ts
 var activeScans = new Map;
-var EXTENSION_VERSION = "0.6.2";
+var EXTENSION_VERSION = "0.6.3";
 function scanOwnerKey(userId) {
   return userId ?? "__extension_owner__";
 }

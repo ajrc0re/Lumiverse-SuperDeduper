@@ -328,6 +328,15 @@ export async function findDuplicateGroupsAsync(
   })
 }
 
+/**
+ * Lumiverse records this timestamp after checking a Chub source for optional
+ * expression packs. It is import bookkeeping, not an expression payload a
+ * card can actually use, so it must never affect the keeper recommendation.
+ */
+const IGNORED_EXTENSION_PAYLOAD_KEYS = new Set([
+  '_lumiverse_chub_expressions_checked',
+])
+
 function payloadCategory(key: string): ExtensionPayloadCategory {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]+/gu, '_')
   if (/lumiscript|regex_script/u.test(normalized)) return 'lumiscripts'
@@ -375,6 +384,7 @@ export function classifyExtensionPayload(
   extensions: Record<string, unknown>,
 ): ExtensionPayloadKey[] {
   return Object.entries(extensions)
+    .filter(([key]) => !IGNORED_EXTENSION_PAYLOAD_KEYS.has(key))
     .map(([key, value]) => {
       const category = payloadCategory(key)
       return {

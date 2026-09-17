@@ -210,6 +210,60 @@ describe('duplicate scan orchestration', () => {
     expect(cardA?.payload.embeddedGalleryItems).toBe(1)
   })
 
+  test('ignores the Chub expression-check stamp when recommending a keeper', async () => {
+    const { api } = createApi([
+      character('checked', {
+        name: 'Same',
+        updated_at: 100,
+        extensions: { _lumiverse_chub_expressions_checked: 1_726_000_000_000 },
+      }),
+      character('newer', { name: 'Same', updated_at: 200 }),
+    ])
+
+    const result = await scanDuplicates(api, {
+      characters: true, worldBooks: false, images: false, regexScripts: false,
+    }, 'name', 0.9)
+
+    const group = result.groups[0]
+    const checked = group?.cards.find((card) => card.id === 'checked')
+    expect(group?.recommendedKeeperId).toBe('newer')
+    expect(checked?.payload.expressions).toBe(0)
+    expect(checked?.payload.categoryCount).toBe(0)
+    expect(checked?.payload.itemCount).toBe(0)
+    expect(checked?.payload.recognizedExtensionKeys).toEqual([])
+    expect(checked?.payload.otherExtensionKeys).toEqual([])
+  })
+
+  test('still gives real expression payloads their payload-first keeper weight', async () => {
+    const { api } = createApi([
+      character('expressions', {
+        name: 'Same',
+        updated_at: 100,
+        extensions: {
+          expressions: {
+            enabled: true,
+            defaultExpression: 'happy',
+            mappings: { happy: 'image-happy', sad: 'image-sad' },
+          },
+        },
+      }),
+      character('newer', { name: 'Same', updated_at: 200 }),
+    ])
+
+    const result = await scanDuplicates(api, {
+      characters: true, worldBooks: false, images: false, regexScripts: false,
+    }, 'name', 0.9)
+
+    const group = result.groups[0]
+    const expressionCard = group?.cards.find((card) => card.id === 'expressions')
+    expect(group?.recommendedKeeperId).toBe('expressions')
+    expect(expressionCard?.payload.expressions).toBe(3)
+    expect(expressionCard?.payload.categoryCount).toBe(1)
+    expect(expressionCard?.payload.recognizedExtensionKeys).toEqual([
+      expect.objectContaining({ key: 'expressions', category: 'expressions' }),
+    ])
+  })
+
   test('labels missing optional data unavailable and recommendations provisional', async () => {
     const { api, calls } = createApi([character('a'), character('b')])
     const result = await scanDuplicates(api, {

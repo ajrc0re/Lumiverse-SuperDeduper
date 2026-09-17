@@ -38,7 +38,7 @@ Similar-mode groups are connected components of qualifying pairs. For example, i
 
 Character-trigram sets measure textual overlap, not meaning. Repeated fragments count only once, so long cards that share a highly consistent template, vocabulary, and formatting can receive unexpectedly high scores despite describing different characters. Raising the threshold reduces but does not eliminate this possibility. Similar-content results should therefore be reviewed before deletion, especially for large groups from one creator.
 
-After matching, SuperDeduper enriches only the cards in duplicate groups. It counts accessible card and payload text, greetings, lorebooks, scripts, expressions, and images, then recommends a keeper using payload coverage, payload item count, update time, accessible text count, creation time, and finally character ID. The selected keeper remains protected, and every deletion requires confirmation and a fresh timestamp check.
+After matching, SuperDeduper enriches only the cards in duplicate groups. It counts accessible card and payload text, greetings, lorebooks, scripts, expressions, and images, then recommends a keeper using payload coverage, payload item count, update time, accessible text count, creation time, and finally character ID. Lumiverse's Chub expression-check timestamp is import bookkeeping rather than an expression payload, so SuperDeduper ignores it while retaining real expression data. The selected keeper remains protected, and every deletion requires confirmation and a fresh timestamp check.
 
 ## Development
 
