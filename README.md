@@ -1,3 +1,5 @@
+![](assets/art-banner.png)
+
 # Lumiverse SuperDeduper
 
 Find, compare, and safely remove duplicate character cards in Lumiverse.
