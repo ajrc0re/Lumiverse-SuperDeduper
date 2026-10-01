@@ -820,7 +820,7 @@ async function deleteCharacterSafely(api, characterId, expectedUpdatedAt) {
 
 // src/backend.ts
 var activeScans = new Map;
-var EXTENSION_VERSION = "0.6.3";
+var EXTENSION_VERSION = "0.6.4";
 function scanOwnerKey(userId) {
   return userId ?? "__extension_owner__";
 }
