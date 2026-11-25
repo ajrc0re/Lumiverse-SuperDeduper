@@ -4,6 +4,7 @@ import { buildComparisonRows } from './comparison'
 import { matchesWildcardSearch, searchFieldValues } from './search'
 import { activeGroupsForBulk } from './group-selection'
 import { superDeduperStyles } from './styles'
+import { createUuidV4Generator } from './uuid'
 import { type BackendResponse, type CardComparison, type DuplicateGroup, type MatchMode, type PermissionAvailability, type ScanResult, type SearchField } from './types'
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -44,16 +45,9 @@ function maxSimilarity(group: DuplicateGroup, cardId: string): number {
   return values.length > 0 ? Math.max(...values) : 1
 }
 
-function createRequestId(): string {
-  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
-  if (typeof globalThis.crypto?.getRandomValues === 'function') {
-    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
-    return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-}
-
 export function setup(ctx: SpindleFrontendContext) {
+  // Scan request IDs only need uniqueness, so v4 is sufficient.
+  const createRequestId = createUuidV4Generator(ctx)
   let deferredReady = false
   try {
     const deferReady = (ctx as SpindleFrontendContext & { deferReady?: () => void }).deferReady
