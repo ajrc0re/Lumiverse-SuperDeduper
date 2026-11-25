@@ -32,7 +32,7 @@ git diff --check
 - The extension may be installed operator-scoped and used by several clients. Forward the originating `userId` through every user-owned backend API call, modal, and targeted frontend response.
 - Never broadcast character data or scan results between users.
 - Keep frontend host-component integrations feature-detected and retain native-control fallbacks so older Lumiverse hosts can still register the drawer.
-- LAN clients may run over insecure HTTP. Do not depend directly on secure-context-only browser APIs such as `crypto.randomUUID()`; use the existing request-ID helper.
+- LAN clients may run over insecure HTTP. Do not depend on secure-context-only browser APIs. Lumiverse rejects frontend bundles that call the secure-context crypto UUID API, so generate IDs with `createUuidV4Generator` in `src/uuid.ts` (`ctx.uuid.v4()` with a `crypto.getRandomValues()` fallback for older hosts).
 - Scan responses must retain their `requestId` so stale or late responses cannot replace a newer scan.
 - Keep scan cancellation scoped per user and suppress results after cancellation.
 

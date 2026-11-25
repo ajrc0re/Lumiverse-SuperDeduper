@@ -383,6 +383,38 @@ var superDeduperStyles = `
   }
 `;
 
+// src/uuid.ts
+function randomBytes(length) {
+  const bytes = new Uint8Array(length);
+  if (typeof globalThis.crypto?.getRandomValues === "function") {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0;index < length; index++)
+      bytes[index] = Math.floor(Math.random() * 256);
+  }
+  return bytes;
+}
+function fallbackUuidV4() {
+  const bytes = randomBytes(16);
+  bytes[6] = (bytes[6] ?? 0) & 15 | 64;
+  bytes[8] = (bytes[8] ?? 0) & 63 | 128;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+function createUuidV4Generator(ctx) {
+  const uuid = ctx.uuid;
+  return () => {
+    if (uuid && typeof uuid.v4 === "function") {
+      try {
+        const value = uuid.v4();
+        if (typeof value === "string" && value)
+          return value;
+      } catch {}
+    }
+    return fallbackUuidV4();
+  };
+}
+
 // src/frontend.ts
 function element(tag, className, text) {
   const value = document.createElement(tag);
@@ -412,16 +444,8 @@ function maxSimilarity(group, cardId) {
   const values = group.matches.filter((match) => match.leftId === cardId || match.rightId === cardId).map((match) => match.similarity);
   return values.length > 0 ? Math.max(...values) : 1;
 }
-function createRequestId() {
-  if (typeof globalThis.crypto?.randomUUID === "function")
-    return globalThis.crypto.randomUUID();
-  if (typeof globalThis.crypto?.getRandomValues === "function") {
-    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
-    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
 function setup(ctx) {
+  const createRequestId = createUuidV4Generator(ctx);
   let deferredReady = false;
   try {
     const deferReady = ctx.deferReady;
@@ -1003,15 +1027,15 @@ function setup(ctx) {
     const pairDetails = element("details", "sd-similarity-pairs");
     pairDetails.append(element("summary", "", `Review qualifying similarity pairs · ${group.matches.length.toLocaleString()} pairs`));
     const content = element("div", "sd-similarity-pairs-content");
-    const status2 = element("div", "sd-muted", "Open this section to load the first matching pairs.");
-    status2.setAttribute("role", "status");
+    const status = element("div", "sd-muted", "Open this section to load the first matching pairs.");
+    status.setAttribute("role", "status");
     const list = element("ol", "sd-similarity-pair-list");
     list.tabIndex = 0;
     list.setAttribute("aria-label", "Qualifying similarity pairs");
-    const controls2 = element("div", "sd-card-actions");
+    const controls = element("div", "sd-card-actions");
     const moreButton = element("button", "sd-button sd-button--secondary", "Show 50 more pairs");
     moreButton.type = "button";
-    controls2.append(moreButton);
+    controls.append(moreButton);
     const cardsById = new Map(group.cards.map((card) => [card.id, card]));
     const cardLabel = (id) => {
       const card = cardsById.get(id);
@@ -1027,15 +1051,15 @@ function setup(ctx) {
         list.append(pair);
       }
       visiblePairs = nextVisiblePairs;
-      status2.textContent = `Showing ${visiblePairs.toLocaleString()} of ${group.matches.length.toLocaleString()} qualifying pairs.`;
-      controls2.hidden = visiblePairs >= group.matches.length;
+      status.textContent = `Showing ${visiblePairs.toLocaleString()} of ${group.matches.length.toLocaleString()} qualifying pairs.`;
+      controls.hidden = visiblePairs >= group.matches.length;
     };
     pairDetails.addEventListener("toggle", () => {
       if (pairDetails.open && visiblePairs === 0)
         appendNextPairs();
     });
     moreButton.addEventListener("click", appendNextPairs);
-    content.append(status2, list, controls2);
+    content.append(status, list, controls);
     pairDetails.append(content);
     parent.append(pairDetails);
   }
